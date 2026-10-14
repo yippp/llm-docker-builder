@@ -1,5 +1,5 @@
 # ==============================================================================
-# 极速构建 + 算子预编译版 Dockerfile (适配 A800 / H20 / H200 / B300 )
+# 极速构建 + 算子预编译版 Dockerfile (专为 A800 / H20 / H200 / B300 )
 # Base: NVIDIA CUDA 13.3.0 Devel + Ubuntu 24.04 (自带 nvcc 13.3)
 # 预编译: DeepSpeed (fused_adam/cpu_adam/aio/utils) + FlashAttn + CausalConv1d + Megatron
 # ==============================================================================
@@ -43,7 +43,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends --allow-change-
     mv /tmp/gh_2.67.0_linux_amd64/bin/gh /usr/local/bin/gh && rm -rf /tmp/gh_*
 
 # ------------------------------------------------------------------------------
-# 2. 极速安装 Conda (自带 Python 3.12 的 Miniforge3) + Node.js v22 二进制 + Bun + uv
+# 2. 极速安装 Conda (Python 3.12) + Node.js v22 + Bun + 升级最新 pip / uv / npm
 # ------------------------------------------------------------------------------
 RUN wget -q https://github.com/conda-forge/miniforge/releases/download/24.11.3-0/Miniforge3-24.11.3-0-Linux-x86_64.sh -O /tmp/miniforge.sh && \
     bash /tmp/miniforge.sh -b -p ${CONDA_DIR} && \
@@ -52,7 +52,8 @@ RUN wget -q https://github.com/conda-forge/miniforge/releases/download/24.11.3-0
     echo "conda activate base" >> /root/.bashrc && \
     curl -fsSL https://nodejs.org/dist/v22.19.0/node-v22.19.0-linux-x64.tar.xz | tar -xJ --strip-components=1 -C /usr/local && \
     curl -fsSL https://bun.sh/install | bash && \
-    pip install --no-cache-dir uv
+    pip install --no-cache-dir -U pip setuptools wheel uv && \
+    npm install -g npm@latest && npm cache clean --force
 
 # ------------------------------------------------------------------------------
 # 3. 安装 AI Coding Agent 套件: herdr + pi + BeaconBay/ck + qmd
@@ -69,12 +70,11 @@ RUN curl -fsSL https://herdr.dev/install.sh | sh && \
     rm -f /tmp/ck.json
 
 # ------------------------------------------------------------------------------
-# 4. 安装 vLLM 0.31.0 底座，并记录此时 100% 兼容的核心包版本锁
+# 4. 安装纯净 vLLM 0.31.0 底座，并导出【全量快照锁】/tmp/vllm_full_snapshot.txt
 # ------------------------------------------------------------------------------
 RUN uv pip install --no-cache "vllm==0.31.0" && \
     pip freeze | grep -E "^(torch|triton|torchvision|torchaudio)==" | sed 's/+.*//' > /tmp/torch_constraints.txt && \
-    pip freeze | grep -E "^(openai|transformers|tokenizers|pydantic|fastapi)==" > /tmp/vllm_golden_lock.txt && \
-    cat /tmp/torch_constraints.txt && cat /tmp/vllm_golden_lock.txt
+    pip freeze | grep '==' | grep -vE '^(pip|setuptools|wheel|uv|numpy|pyarrow)==' | sed 's/+.*//' > /tmp/vllm_full_snapshot.txt
 
 # ------------------------------------------------------------------------------
 # 5. 秒装预编译 flash-attn 与 causal-conv1d
@@ -100,7 +100,7 @@ RUN PY_TAG=$(python -c "import sys; print(f'cp{sys.version_info.major}{sys.versi
     rm -f /tmp/fa.json /tmp/cc.json
 
 # ------------------------------------------------------------------------------
-# 6. 安装 JupyterLab + ms-swift 4.6 + VLM + RL + 决策模型依赖
+# 6. 并发安装 JupyterLab + 正式版 ms-swift 4.6 + VLM + RL + 决策模型依赖
 # ------------------------------------------------------------------------------
 RUN uv pip install --no-cache \
     -c /tmp/torch_constraints.txt \
@@ -120,7 +120,7 @@ RUN uv pip install --no-cache \
     "decord" "av" "opencv-python-headless" "librosa" "soundfile" "einops" \
     "ray[default]" "math_verify" "gymnasium" "wandb" "swanlab" "tensorboard" \
     "evalscope>=1.0" "icecream" "py-spy" "pre-commit" \
-    "ms-swift@git+https://github.com/modelscope/ms-swift.git@main" && \
+    "ms-swift==4.6.*" && \
     python -m ipykernel install --sys-prefix --name python312 --display-name "Python 3.12 (CUDA 13.3 + vLLM + Swift 4.6)"
 
 # ------------------------------------------------------------------------------
@@ -143,18 +143,17 @@ RUN VALID_ARCH=$(python -c "import os, torch.utils.cpp_extension as ext; os.envi
     ds_report
 
 # ------------------------------------------------------------------------------
-# 8. 隔离安装 SGLang + 还原 vLLM 0.31 锁 + 清除 kernels 包
+# 8. 隔离安装 SGLang + 按全量快照精确还原 vLLM 0.31 所有配对依赖
 # ------------------------------------------------------------------------------
 RUN uv venv /opt/sglang-env --system-site-packages && \
     UV_PROJECT_ENVIRONMENT=/opt/sglang-env uv pip install --no-cache -c /tmp/torch_constraints.txt "sglang[all]>=0.5.20" && \
     ln -sf /opt/sglang-env/bin/python /usr/local/bin/sglang-python && \
-    # 彻底卸载会导致 transformers LayerRepository 报错的 kernels 包
     uv pip uninstall kernels || true && \
-    # 用 --no-deps 精准还原第 4 步 vLLM 0.31 原装的 openai / transformers 与 NumPy 2.2 / PyArrow
-    uv pip install --no-cache --no-deps -r /tmp/vllm_golden_lock.txt "numpy>=2.1.0,<2.3.0" "pyarrow>=18.0.0" && \
+    # 完整还原第 4 步 vLLM 0.31.0 安装时的全部配对包快照，不会出现任何 pydantic / pydantic-core 不匹配
+    uv pip install --no-cache --no-deps -r /tmp/vllm_full_snapshot.txt "numpy>=2.1.0,<2.3.0" "pyarrow>=18.0.0" && \
     SITE_PKG=$(python -c "import site; print(site.getsitepackages()[0])") && \
     printf "try:\n    import numpy as np\n    for _k, _v in [('float_', np.float64), ('int_', np.int64), ('bool8', np.bool_), ('uint', np.uint64), ('complex_', np.complex128), ('object_', np.object_), ('str_', np.str_), ('unicode_', np.str_), ('NaN', np.nan), ('PINF', np.inf), ('NINF', -np.inf), ('infty', np.inf), ('Inf', np.inf)]:\n        if not hasattr(np, _k):\n            setattr(np, _k, _v)\nexcept Exception:\n    pass\n" >> "${SITE_PKG}/sitecustomize.py" && \
-    rm -f /tmp/torch_constraints.txt /tmp/vllm_golden_lock.txt && \
+    rm -f /tmp/torch_constraints.txt /tmp/vllm_full_snapshot.txt && \
     mkdir -p /root/.cache/modelscope/_github /opt && \
     git clone --depth 1 https://github.com/NVIDIA/Megatron-LM.git /root/.cache/modelscope/_github/Megatron-LM && \
     make -C /root/.cache/modelscope/_github/Megatron-LM/megatron/core/datasets || true && \
@@ -162,8 +161,7 @@ RUN uv venv /opt/sglang-env --system-site-packages && \
     printf "set -g mouse on\nset -g history-limit 50000\nset -g default-terminal 'screen-256color'\nset -g status-bg black\nset -g status-fg green\n" > /root/.tmux.conf && \
     printf '#!/bin/bash\nexec jupyter lab --ip=0.0.0.0 --port=${JUPYTER_PORT:-8888} --no-browser --allow-root --ServerApp.token="${JUPYTER_TOKEN:-}" --ServerApp.password="" --notebook-dir=/workspace\n' > /usr/local/bin/start-jupyter && \
     chmod +x /usr/local/bin/start-jupyter && \
-    # 构建期全量导入自检
-    python -c "import sys, numpy as np, pyarrow as pa, scipy, sklearn, cv2, pandas as pd, openai, torch, torchvision, torchaudio, transformers, datasets, peft, trl, deepspeed, modelscope, vllm, swift, timm, decord, librosa, qwen_vl_utils, qwen_omni_utils, ray, math_verify, gymnasium, wandb, swanlab; from openai.types.responses import NamespaceTool; from vllm import LLM, SamplingParams; print('✅ All 28 core packages imported cleanly without conflict!')"
+    python -c "import sys, numpy as np, pyarrow as pa, scipy, sklearn, cv2, pandas as pd, pydantic, openai, torch, torchvision, torchaudio, transformers, datasets, peft, trl, deepspeed, modelscope, vllm, swift, timm, decord, librosa, qwen_vl_utils, qwen_omni_utils, ray, math_verify, gymnasium, wandb, swanlab; from openai.types.responses import NamespaceTool; from vllm import LLM, SamplingParams; print('✅ All 29 core packages imported cleanly! ms-swift:', swift.__version__, 'pydantic:', pydantic.__version__)"
 
 ENV MAX_JOBS=8 \
     NVCC_THREADS=4
