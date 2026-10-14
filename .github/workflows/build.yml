@@ -281,7 +281,10 @@ jobs:
           docker save "$IMAGE_URI" | pigz "-${PIGZ_LEVEL}" -p 4 > "$TAR_FILE"
           echo "压缩耗时 $(( $(date +%s) - START )) 秒"
           ls -lh "$TAR_FILE"
-          sha256sum "$TAR_FILE" > "${TAR_FILE}.sha256"
+          # 校验文件里只存文件名，不存 runner 上的绝对路径，
+          # 否则下载后 sha256sum -c 会去找 /home/runner/... 而失败
+          ( cd "$EXPORT_DIR" && sha256sum "$(basename "$TAR_FILE")" > "$(basename "$TAR_FILE").sha256" )
+          cat "${TAR_FILE}.sha256"
 
           # 导出完成后立即删除本地 Docker 镜像，释放约 25GB 空间
           docker rmi -f "$IMAGE_URI" local-test:verify || true
