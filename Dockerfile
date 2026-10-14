@@ -5,12 +5,14 @@
 # ==============================================================================
 FROM nvcr.io/nvidia/cuda:13.3.0-devel-ubuntu24.04
 
+# 强制所有 RUN 指令使用 /bin/bash 执行，彻底杜绝 /bin/sh (dash) 语法报错
+SHELL ["/bin/bash", "-c"]
+
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
     TZ=Asia/Hong_Kong \
-    # 锁定 A800(8.0), H20/H200(9.0), B200/B300(10.0;10.3)
     TORCH_CUDA_ARCH_LIST="8.0;9.0;10.0;10.3" \
     CONDA_DIR=/opt/conda \
     PATH=/root/.local/bin:/root/.bun/bin:/opt/conda/bin:/usr/local/cuda/bin:$PATH \
@@ -38,10 +40,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends --allow-change-
     apt-get clean && rm -rf /var/lib/apt/lists/* && \
     wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 && \
     chmod +x /usr/local/bin/yq && \
-    GH_VER=$((curl -fsSL https://api.github.com/repos/cli/cli/releases/latest || echo '{"tag_name":"v2.67.0"}') | jq -r '.tag_name' | tr -d 'v') && \
-    GH_VER=${GH_VER:-2.67.0} && \
-    curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VER}/gh_${GH_VER}_linux_amd64.tar.gz" | tar -xz -C /tmp && \
-    mv /tmp/gh_${GH_VER}_linux_amd64/bin/gh /usr/local/bin/gh && rm -rf /tmp/gh_*
+    curl -fsSL "https://github.com/cli/cli/releases/download/v2.67.0/gh_2.67.0_linux_amd64.tar.gz" | tar -xz -C /tmp && \
+    mv /tmp/gh_2.67.0_linux_amd64/bin/gh /usr/local/bin/gh && rm -rf /tmp/gh_*
 
 # ------------------------------------------------------------------------------
 # 2. 极速安装 Conda (自带 Python 3.12 的 Miniforge3) + Node.js v22 二进制 + Bun + uv
@@ -62,12 +62,12 @@ RUN curl -fsSL https://herdr.dev/install.sh | sh && \
     npm install -g --ignore-scripts @earendil-works/pi-coding-agent && \
     npm install -g @tobilu/qmd @beaconbay/ck-search && \
     npm cache clean --force && \
-    CK_URL=$((curl -fsSL https://api.github.com/repos/BeaconBay/ck/releases/latest || echo "{}") \
-      | jq -r '.assets[]? | select(.name | contains("x86_64-unknown-linux-gnu.tar.gz")) | .browser_download_url' \
-      | head -n 1) && \
+    curl -fsSL https://api.github.com/repos/BeaconBay/ck/releases/latest -o /tmp/ck.json || echo "{}" > /tmp/ck.json && \
+    CK_URL=$(jq -r '.assets[]? | select(.name | contains("x86_64-unknown-linux-gnu.tar.gz")) | .browser_download_url' /tmp/ck.json | head -n 1) && \
     if [ -n "$CK_URL" ]; then \
       curl -fsSL "$CK_URL" | tar -xz -C /usr/local/bin && chmod +x /usr/local/bin/ck; \
-    fi
+    fi && \
+    rm -f /tmp/ck.json
 
 # ------------------------------------------------------------------------------
 # 4. 安装 vLLM 0.31.0 底座并锁定 PyTorch 版本
@@ -77,21 +77,27 @@ RUN uv pip install --no-cache "vllm==0.31.0" && \
     cat /tmp/torch_constraints.txt
 
 # ------------------------------------------------------------------------------
-# 5. 秒装预编译 flash-attn 与 causal-conv1d
+# 5. 秒装预编译 flash-attn 与 causal-conv1d (使用临时 JSON 文件避免任何括号嵌套)
 # ------------------------------------------------------------------------------
 RUN PY_TAG=$(python -c "import sys; print(f'cp{sys.version_info.major}{sys.version_info.minor}')") && \
     TORCH_MM=$(python -c "import torch; print('.'.join(torch.__version__.split('+')[0].split('.')[:2]))") && \
     CUDA_MAJ=$(python -c "import torch; print((torch.version.cuda or '13.0').split('.')[0])") && \
-    FA_URL=$((curl -fsSL "https://api.github.com/repos/mjun0812/flash-attention-prebuild-wheels/releases?per_page=10" || echo "[]") \
-      | jq -r --arg py "$PY_TAG" --arg tm "torch${TORCH_MM}" --arg cu "cu${CUDA_MAJ}" \
-        '.[].assets[]?.browser_download_url | select(endswith("linux_x86_64.whl") and contains($py) and contains($tm) and contains($cu))' \
-      | head -n 1) && \
-    if [ -n "$FA_URL" ]; then uv pip install --no-cache --no-deps "$FA_URL"; fi && \
-    CC_URL=$((curl -fsSL "https://api.github.com/repos/Dao-AILab/causal-conv1d/releases?per_page=5" || echo "[]") \
-      | jq -r --arg py "$PY_TAG" --arg tm "torch${TORCH_MM}" --arg cu "cu${CUDA_MAJ}" \
-        '.[].assets[]?.browser_download_url | select(endswith("linux_x86_64.whl") and contains($py) and contains($tm) and contains($cu))' \
-      | head -n 1) && \
-    if [ -n "$CC_URL" ]; then uv pip install --no-cache --no-deps "$CC_URL"; fi
+    echo "Checking prebuilt wheels for Py=${PY_TAG}, Torch=${TORCH_MM}, CUDA=cu${CUDA_MAJ}" && \
+    curl -fsSL "https://api.github.com/repos/mjun0812/flash-attention-prebuild-wheels/releases?per_page=10" -o /tmp/fa.json || echo "[]" > /tmp/fa.json && \
+    FA_URL=$(jq -r --arg py "$PY_TAG" --arg tm "torch${TORCH_MM}" --arg cu "cu${CUDA_MAJ}" \
+      '.[].assets[]?.browser_download_url | select(endswith("linux_x86_64.whl") and contains($py) and contains($tm) and contains($cu))' /tmp/fa.json | head -n 1) && \
+    if [ -n "$FA_URL" ]; then \
+      echo "Installing prebuilt flash-attn: $FA_URL" && \
+      uv pip install --no-cache --no-deps "$FA_URL"; \
+    fi && \
+    curl -fsSL "https://api.github.com/repos/Dao-AILab/causal-conv1d/releases?per_page=5" -o /tmp/cc.json || echo "[]" > /tmp/cc.json && \
+    CC_URL=$(jq -r --arg py "$PY_TAG" --arg tm "torch${TORCH_MM}" --arg cu "cu${CUDA_MAJ}" \
+      '.[].assets[]?.browser_download_url | select(endswith("linux_x86_64.whl") and contains($py) and contains($tm) and contains($cu))' /tmp/cc.json | head -n 1) && \
+    if [ -n "$CC_URL" ]; then \
+      echo "Installing prebuilt causal-conv1d: $CC_URL" && \
+      uv pip install --no-cache --no-deps "$CC_URL"; \
+    fi && \
+    rm -f /tmp/fa.json /tmp/cc.json
 
 # ------------------------------------------------------------------------------
 # 6. 一次性并发安装 JupyterLab + ms-swift 4.6 + VLM + RL + 决策模型依赖
@@ -119,15 +125,11 @@ RUN uv pip install --no-cache \
 
 # ------------------------------------------------------------------------------
 # 7. 针对 A800(8.0) / H20&H200(9.0) / B300(10.0;10.3) 预编译 DeepSpeed 4 大核心算子
-#    (fused_adam, cpu_adam, async_io, utils) — 容器启动训练时零 JIT 编译等待！
 # ------------------------------------------------------------------------------
-RUN ARCH_LIST=$(python -c "import os, torch.utils.cpp_extension as ext; os.environ['TORCH_CUDA_ARCH_LIST']='8.0;9.0;10.0;10.3'; \
-      print('8.0;9.0;10.0;10.3') if not hasattr(ext, '_get_cuda_arch_flags') else None" 2>/dev/null || true) && \
-    VALID_ARCH=$(python -c "import os, torch.utils.cpp_extension as ext; \
-      os.environ['TORCH_CUDA_ARCH_LIST']='8.0;9.0;10.0;10.3'; \
-      try: ext._get_cuda_arch_flags(); print('8.0;9.0;10.0;10.3') \
-      except Exception: print('8.0;9.0;10.0+PTX')") && \
-    echo "Pre-compiling DeepSpeed ops for target architectures: ${VALID_ARCH}" && \
+RUN VALID_ARCH=$(python -c "import os, torch.utils.cpp_extension as ext; os.environ['TORCH_CUDA_ARCH_LIST']='8.0;9.0;10.0;10.3'; \
+      ext._get_cuda_arch_flags(); print('8.0;9.0;10.0;10.3')" 2>/dev/null || echo "8.0;9.0;10.0+PTX") && \
+    DS_PKG=$(pip freeze | grep '^deepspeed==') && \
+    echo "Pre-compiling ${DS_PKG} ops for target architectures: ${VALID_ARCH}" && \
     TORCH_CUDA_ARCH_LIST="${VALID_ARCH}" \
     MAX_JOBS=2 \
     NVCC_THREADS=2 \
@@ -137,8 +139,7 @@ RUN ARCH_LIST=$(python -c "import os, torch.utils.cpp_extension as ext; os.envir
     DS_BUILD_AIO=1 \
     DS_BUILD_UTILS=1 \
     DS_BUILD_AVX512=0 \
-    pip install --no-cache-dir --no-build-isolation --no-deps --force-reinstall --no-binary deepspeed \
-      "$(pip freeze | grep '^deepspeed==')" && \
+    pip install --no-cache-dir --no-build-isolation --no-deps --force-reinstall --no-binary deepspeed "${DS_PKG}" && \
     ds_report
 
 # ------------------------------------------------------------------------------
@@ -156,7 +157,6 @@ RUN (uv pip install --no-cache -c /tmp/torch_constraints.txt "sglang[all]>=0.5.2
     printf '#!/bin/bash\nexec jupyter lab --ip=0.0.0.0 --port=${JUPYTER_PORT:-8888} --no-browser --allow-root --ServerApp.token="${JUPYTER_TOKEN:-}" --ServerApp.password="" --notebook-dir=/workspace\n' > /usr/local/bin/start-jupyter && \
     chmod +x /usr/local/bin/start-jupyter
 
-# 运行期恢复 8 并发编译线程，供大服务器运行使用
 ENV MAX_JOBS=8 \
     NVCC_THREADS=4
 
