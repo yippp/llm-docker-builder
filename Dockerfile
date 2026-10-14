@@ -5,7 +5,6 @@
 # ==============================================================================
 FROM nvcr.io/nvidia/cuda:13.3.0-devel-ubuntu24.04
 
-# 强制所有 RUN 指令使用 /bin/bash 执行，彻底杜绝 /bin/sh (dash) 语法报错
 SHELL ["/bin/bash", "-c"]
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -20,7 +19,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
     UV_SYSTEM_PYTHON=1 \
     UV_HTTP_TIMEOUT=300 \
-    HF_HUB_ENABLE_HF_TRANSFER=1
+    HF_XET_HIGH_PERFORMANCE=1
 
 # ------------------------------------------------------------------------------
 # 1. 单次 apt-get 安装系统工具、FFmpeg、libaio-dev (DeepSpeed AIO 必需) 与 RDMA 库
@@ -70,14 +69,15 @@ RUN curl -fsSL https://herdr.dev/install.sh | sh && \
     rm -f /tmp/ck.json
 
 # ------------------------------------------------------------------------------
-# 4. 安装 vLLM 0.31.0 底座并锁定 PyTorch 版本
+# 4. 安装 vLLM 0.31.0 底座，并同时锁定 PyTorch 与 NumPy >= 2.0.0 
 # ------------------------------------------------------------------------------
-RUN uv pip install --no-cache "vllm==0.31.0" && \
+RUN uv pip install --no-cache "vllm==0.31.0" "numpy>=2.0.0,<2.3.0" && \
     pip freeze | grep -E "^(torch|triton|torchvision|torchaudio)==" | sed 's/+.*//' > /tmp/torch_constraints.txt && \
+    echo "numpy>=2.0.0,<2.3.0" >> /tmp/torch_constraints.txt && \
     cat /tmp/torch_constraints.txt
 
 # ------------------------------------------------------------------------------
-# 5. 秒装预编译 flash-attn 与 causal-conv1d (使用临时 JSON 文件避免任何括号嵌套)
+# 5. 秒装预编译 flash-attn 与 causal-conv1d
 # ------------------------------------------------------------------------------
 RUN PY_TAG=$(python -c "import sys; print(f'cp{sys.version_info.major}{sys.version_info.minor}')") && \
     TORCH_MM=$(python -c "import torch; print('.'.join(torch.__version__.split('+')[0].split('.')[:2]))") && \
@@ -101,9 +101,11 @@ RUN PY_TAG=$(python -c "import sys; print(f'cp{sys.version_info.major}{sys.versi
 
 # ------------------------------------------------------------------------------
 # 6. 一次性并发安装 JupyterLab + ms-swift 4.6 + VLM + RL + 决策模型依赖
+#    (已适配 huggingface_hub>=1.33.0 Xet 高速引擎)
 # ------------------------------------------------------------------------------
 RUN uv pip install --no-cache \
     -c /tmp/torch_constraints.txt \
+    "numpy>=2.0.0,<2.3.0" \
     nvitop ast-grep-cli pybind11 wheel packaging ninja psutil \
     jupyterlab notebook ipykernel ipywidgets \
     matplotlib pandas seaborn scipy scikit-learn \
@@ -115,7 +117,7 @@ RUN uv pip install --no-cache \
     "trl>=0.15,<1.0" \
     "deepspeed>=0.14,<0.19" \
     "accelerate" "optimum" "bitsandbytes" "mcore-bridge" "liger-kernel" \
-    "gradio<5.33" "huggingface_hub[cli,hf_transfer]" \
+    "gradio<5.33" "huggingface_hub>=1.0.0" \
     "timm" "qwen-vl-utils" "qwen-omni-utils" "keye-vl-utils" \
     "decord" "av" "opencv-python-headless" "librosa" "soundfile" "einops" \
     "ray[default]" "math_verify" "gymnasium" "wandb" "swanlab" "tensorboard" \
@@ -143,11 +145,13 @@ RUN VALID_ARCH=$(python -c "import os, torch.utils.cpp_extension as ext; os.envi
     ds_report
 
 # ------------------------------------------------------------------------------
-# 8. 智能安装 SGLang + 预克隆并预编译 Megatron-LM 数据集 C++ 算子 & StartLux-Decision
+# 8. 智能安装 SGLang + 强制锁死主环境 NumPy >= 2.0 
 # ------------------------------------------------------------------------------
 RUN (uv pip install --no-cache -c /tmp/torch_constraints.txt "sglang[all]>=0.5.20") || \
     (uv venv /opt/sglang-env --system-site-packages && \
      UV_PROJECT_ENVIRONMENT=/opt/sglang-env uv pip install --no-cache "sglang[all]>=0.5.20") && \
+    # 最终防线：无论任何次级依赖是否篡改了 NumPy，强制保证主环境 NumPy >= 2.0.0 以兼容 pyarrow/datasets/vllm
+    uv pip install --no-cache -c /tmp/torch_constraints.txt "numpy>=2.0.0,<2.3.0" "pyarrow>=18.0.0" && \
     rm -f /tmp/torch_constraints.txt && \
     mkdir -p /root/.cache/modelscope/_github /opt && \
     git clone --depth 1 https://github.com/NVIDIA/Megatron-LM.git /root/.cache/modelscope/_github/Megatron-LM && \
