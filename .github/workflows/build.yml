@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: '镜像 tag。留空则按镜像内实际版本自动派生，形如 cu133-py312-vllm0.31.0-swift4.6.0-sglang0.5.21-rl；填写后使用指定值'
+        description: '镜像 tag。留空则按镜像内实际版本自动派生，形如 cu133-py312-vllm0.31.0-swift4.6.0-rl；填写后使用指定值'
         required: false
         default: ''
       hf_repo_id:
@@ -116,10 +116,9 @@ jobs:
           print('✅ FLA:         ', meta.version('flash-linear-attention'))
           "
 
-          echo "=== [3/3] 验证 SGLang (/opt/sglang-env)、DeepSpeed 预编译算子与 CLI 入口 ==="
+          echo "=== [3/3] 验证 DeepSpeed 预编译算子与 CLI 入口 ==="
           docker run --rm local-test:verify bash -c "
             set -e
-            /opt/sglang-env/bin/python -c 'import sglang; print(\"✅ SGLang (/opt/sglang-env):\", sglang.__version__)'
             ds_report
             which vllm && which swift
             swift --help > /dev/null
@@ -151,11 +150,10 @@ jobs:
           : "${PY:?镜像 /opt/versions.env 缺字段 PY，无法自动派生 tag}"
           : "${VLLM:?镜像 /opt/versions.env 缺字段 VLLM，无法自动派生 tag}"
           : "${SWIFT:?镜像 /opt/versions.env 缺字段 SWIFT，无法自动派生 tag}"
-          : "${SGLANG:?镜像 /opt/versions.env 缺字段 SGLANG，无法自动派生 tag}"
 
-          TAG="cu${CU//./}-py${PY//./}-vllm${VLLM}-swift${SWIFT}-sglang${SGLANG}-rl"
+          TAG="cu${CU//./}-py${PY//./}-vllm${VLLM}-swift${SWIFT}-rl"
           echo "自动派生 tag: $TAG"
-          echo "（CUDA ${CU} / Python ${PY} / vLLM ${VLLM} / ms-swift ${SWIFT} / SGLang ${SGLANG}）"
+          echo "（CUDA ${CU} / Python ${PY} / vLLM ${VLLM} / ms-swift ${SWIFT}）"
           echo "（torch ${TORCH:-?} / DeepSpeed ${DEEPSPEED:-?} / flash-attn ${FLASH_ATTN:-?}）"
           if [ "${FLASH_ATTN:-none}" = "none" ]; then
             echo "::warning::镜像内没有 flash-attn（没有匹配的预编译轮子），需要时查看构建日志第 5 步的 WARNING"

@@ -9,15 +9,15 @@ GitHub Actions 构建后推送到 GHCR，并导出单个 `.tar.gz` 上传到 Hug
 | --- | --- |
 | 基础镜像 | `nvcr.io/nvidia/cuda:13.3.0-devel-ubuntu24.04`（含 nvcc 13.3） |
 | Python | 3.12，由 miniforge 安装到 `/opt/conda` |
-| 推理 | vLLM（base 环境）、SGLang（`/opt/sglang-env`，入口 `sglang-python`） |
+| 推理 | vLLM |
 | 训练 | ms-swift、DeepSpeed（构建时预编译 fused_adam / cpu_adam / aio / utils 四个算子）、Megatron-LM |
-| 注意力 | flash-attn，取自 mjun0812 的预编译轮子仓库（排除 ROCm 构建，优先匹配与 torch 一致的 CUDA 小版本）。causal-conv1d 上游只发布 cu11torch2.6，CUDA 13 下取不到，构建时打印 WARNING 后跳过 |
+| 注意力 | flash-attn，取自 mjun0812 的预编译轮子仓库（排除 ROCm 构建，优先匹配与 torch 一致的 CUDA 小版本） |
 | 前端工具 | JupyterLab（`start-jupyter`）、Node.js、Bun、npm |
 | 命令行 | tmux、vim、htop、nvtop、fzf、jq、yq、bat、ripgrep、fd、ffmpeg、git-lfs、gh |
 | Coding Agent | herdr、pi、qmd、ck |
 | 其他 | `/opt/StartLux-Decision`、`/root/.cache/modelscope/_github/Megatron-LM` |
 
-暴露端口 `8888`（Jupyter）、`8000`（vLLM）、`30000`（SGLang）。默认工作目录 `/workspace`。
+暴露端口 `8888`（Jupyter）、`8000`（vLLM）。默认工作目录 `/workspace`。
 
 ## 版本策略
 
@@ -64,20 +64,18 @@ VLLM=0.31.0
 SWIFT=4.6.0
 TORCH=2.13.0
 DEEPSPEED=0.19.7
-SGLANG=0.5.21
 FLASH_ATTN=2.8.3
 ```
 
 workflow 读取该文件生成 tag，形如：
 
 ```
-cu133-py312-vllm0.31.0-swift4.6.0-sglang0.5.21-rl
+cu133-py312-vllm0.31.0-swift4.6.0-rl
 ```
 
 `workflow_dispatch` 的 `image_tag` 留空即自动派生，填写后使用指定值。
 
-`FLASH_ATTN=none` 表示没匹配到预编译轮子。sglang 依赖的 `flash-attn-4` 只提供
-`flash_attn/cute/` 子包，不会覆盖 flash-attn 2.x 的顶层模块，两者可以共存。
+`FLASH_ATTN=none` 表示没匹配到预编译轮子。
 GHCR 地址为 `ghcr.io/<owner>/llm-env:<tag>`，HuggingFace 上的文件名为 `llm-env-<tag>.tar.gz`。
 
 ## 触发构建
@@ -98,7 +96,7 @@ Actions → `Build Image & Upload Single tar.gz to HuggingFace` → Run workflow
 
 ```bash
 docker run --gpus all -it --rm \
-  -p 8888:8888 -p 8000:8000 -p 30000:30000 \
+  -p 8888:8888 -p 8000:8000 \
   -v "$PWD:/workspace" \
   -e JUPYTER_TOKEN=<your-token> \
   ghcr.io/yippp/llm-env:<tag>
@@ -106,8 +104,8 @@ docker run --gpus all -it --rm \
 # 容器内启动 Jupyter
 start-jupyter
 
-# SGLang 使用独立环境
-sglang-python -m sglang.launch_server --help
+# 随时重跑导入检查
+verify-imports.py
 ```
 
 从 HuggingFace 下载后导入：

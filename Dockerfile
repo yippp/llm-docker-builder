@@ -1,7 +1,7 @@
 # ==============================================================================
 # GPU 训练镜像 Dockerfile，目标卡型 A800 / H20 / H200 / B300
 # 基础镜像：NVIDIA CUDA 13.3.0 Devel + Ubuntu 24.04（含 nvcc 13.3）
-# 构建时预编译：DeepSpeed 算子 (fused_adam/cpu_adam/aio/utils)、FlashAttn、CausalConv1d、Megatron
+# 构建时预编译：DeepSpeed 算子 (fused_adam/cpu_adam/aio/utils)、FlashAttn、Megatron
 # ==============================================================================
 ARG CUDA_IMAGE=nvcr.io/nvidia/cuda:13.3.0-devel-ubuntu24.04
 FROM ${CUDA_IMAGE}
@@ -93,19 +93,17 @@ RUN curl -fsSL https://herdr.dev/install.sh | sh && \
     rm -f /tmp/ck.json
 
 # ------------------------------------------------------------------------------
-# 4. 安装 vLLM（>=0.31.0 浮动），并把当时的全部已安装包版本导出到 /tmp/vllm_full_snapshot.txt
+# 4. 安装 vLLM（>=0.31.0 浮动），并把 torch 系列的实际版本导出为 /tmp/torch_constraints.txt，
+#    供第 6、7 步作为约束使用，避免后续安装把 torch 换成与 vLLM 不配对的版本
 # ------------------------------------------------------------------------------
 RUN uv pip install --no-cache "vllm>=0.31.0" && \
-    pip freeze | grep -E "^(torch|triton|torchvision|torchaudio)==" | sed 's/+.*//' > /tmp/torch_constraints.txt && \
-    pip freeze | grep '==' | grep -vE '^(pip|setuptools|wheel|uv|numpy|pyarrow)==' | sed 's/+.*//' > /tmp/vllm_full_snapshot.txt
+    pip freeze | grep -E "^(torch|triton|torchvision|torchaudio)==" | sed 's/+.*//' > /tmp/torch_constraints.txt
 
 # ------------------------------------------------------------------------------
-# 5. 安装预编译的 flash-attn 与 causal-conv1d
-# flash-attn：mjun0812 的预编译仓库最新的几个 release 全是 ROCm 构建，只取前 10 个
-# release 会全部错过 CUDA 轮子，因此 per_page=100 并排除 rocm；同一个 flash_attn 版本
-# 会同时提供 cu130 和 cu132 两个构建，优先取与 torch.version.cuda 完全一致的那个。
-# causal-conv1d：Dao-AILab 只发布 cu11torch2.6 的轮子，没有 CUDA 13 构建，
-# 当前只能跳过；如需该算子，改为源码编译。
+# 5. 安装预编译的 flash-attn
+# mjun0812 的预编译仓库最新的几个 release 全是 ROCm 构建，只取前 10 个 release
+# 会全部错过 CUDA 轮子，因此 per_page=100 并排除 rocm；同一个 flash_attn 版本会同时
+# 提供 cu130 和 cu132 两个构建，优先取与 torch.version.cuda 完全一致的那个。
 # ------------------------------------------------------------------------------
 RUN PY_TAG=$(python -c "import sys; print(f'cp{sys.version_info.major}{sys.version_info.minor}')") && \
     TORCH_MM=$(python -c "import torch; print('.'.join(torch.__version__.split('+')[0].split('.')[:2]))") && \
@@ -123,16 +121,7 @@ RUN PY_TAG=$(python -c "import sys; print(f'cp{sys.version_info.major}{sys.versi
     else \
       echo "⚠️  WARNING: 没有匹配的 flash-attn 预编译轮子 (Py=${PY_TAG}, torch${TORCH_MM}, cu${CUDA_MM}/cu${CUDA_MAJ})，镜像内将不含 flash-attn"; \
     fi && \
-    { curl -fsSL "https://api.github.com/repos/Dao-AILab/causal-conv1d/releases?per_page=20" -o /tmp/cc.json || echo "[]" > /tmp/cc.json; } && \
-    CC_URL=$(jq -r --arg py "$PY_TAG" --arg tm "torch${TORCH_MM}" --arg cu "cu${CUDA_MAJ}" \
-      '.[].assets[]?.browser_download_url | select(endswith("linux_x86_64.whl") and contains($py) and contains($tm) and contains($cu))' /tmp/cc.json | head -n 1) && \
-    if [ -n "$CC_URL" ]; then \
-      echo "安装预编译 causal-conv1d: $CC_URL" && \
-      uv pip install --no-cache --no-deps "$CC_URL"; \
-    else \
-      echo "⚠️  WARNING: 上游没有 cu${CUDA_MAJ} + torch${TORCH_MM} 的 causal-conv1d 预编译轮子（Dao-AILab 目前只发 cu11torch2.6），镜像内将不含 causal-conv1d"; \
-    fi && \
-    rm -f /tmp/fa.json /tmp/cc.json
+    rm -f /tmp/fa.json
 
 # ------------------------------------------------------------------------------
 # 6. 安装 JupyterLab + ms-swift（>=4.6 浮动）+ VLM / RL / 决策模型依赖
@@ -161,7 +150,8 @@ RUN uv pip install --no-cache \
     decord av opencv-python-headless librosa audioread soundfile einops \
     "ray[default]" math_verify gymnasium wandb swanlab tensorboard \
     evalscope icecream py-spy pre-commit \
-    "ms-swift>=4.6" && \
+    "ms-swift>=4.6" \
+    "numpy>=2.1.0" "pyarrow>=18.0.0" && \
     PY_TAG=$(python -c "import sys; print(f'python{sys.version_info[0]}{sys.version_info[1]}')") && \
     python -m ipykernel install --sys-prefix --name "$PY_TAG" --display-name "Python ${PYTHON_VERSION} (CUDA + vLLM + ms-swift)"
 
@@ -185,21 +175,15 @@ RUN VALID_ARCH=$(python -c "import os, torch.utils.cpp_extension as ext; os.envi
     ds_report
 
 # ------------------------------------------------------------------------------
-# 8. 安装 SGLang，按第 4 步的快照还原 vLLM 的全部依赖版本
-#    写入 /usr/local/bin/verify-imports.py 做导入检查：一次性报出全部失败模块，
-#    而不是遇到第一个就退出，避免每漏一个依赖就重跑一次完整构建。
-#    最后写出 /opt/versions.env，workflow 读取该文件自动派生镜像 tag，
-#    因此库版本更新后 tag 随之变化。
+# 8. 收尾：numpy 兼容 shim、Megatron-LM、start-jupyter、导入检查与版本清单
+#    verify-imports.py 一次列出全部导入失败的模块，而不是遇到第一个就退出，
+#    避免每漏一个依赖就重跑一次完整构建；该脚本保留在镜像内，可随时重跑。
+#    /opt/versions.env 供 workflow 读取以自动派生镜像 tag，库版本更新后 tag 随之变化。
+#    SGLang 与 vLLM 在 flashinfer-python 等 6 个包上版本互斥，不能同环境共存。
 # ------------------------------------------------------------------------------
-RUN uv venv /opt/sglang-env --system-site-packages && \
-    UV_PROJECT_ENVIRONMENT=/opt/sglang-env uv pip install --no-cache -c /tmp/torch_constraints.txt "sglang[all]>=0.5.20" && \
-    ln -sf /opt/sglang-env/bin/python /usr/local/bin/sglang-python && \
-    uv pip uninstall kernels || true && \
-    # 按第 4 步的快照还原全部依赖版本，避免 pydantic 与 pydantic-core 版本不匹配
-    uv pip install --no-cache --no-deps -r /tmp/vllm_full_snapshot.txt "numpy>=2.1.0" "pyarrow>=18.0.0" && \
-    SITE_PKG=$(python -c "import site; print(site.getsitepackages()[0])") && \
+RUN SITE_PKG=$(python -c "import site; print(site.getsitepackages()[0])") && \
     printf "try:\n    import numpy as np\n    for _k, _v in [('float_', np.float64), ('int_', np.int64), ('bool8', np.bool_), ('uint', np.uint64), ('complex_', np.complex128), ('object_', np.object_), ('str_', np.str_), ('unicode_', np.str_), ('NaN', np.nan), ('PINF', np.inf), ('NINF', -np.inf), ('infty', np.inf), ('Inf', np.inf)]:\n        if not hasattr(np, _k):\n            setattr(np, _k, _v)\nexcept Exception:\n    pass\n" >> "${SITE_PKG}/sitecustomize.py" && \
-    rm -f /tmp/torch_constraints.txt /tmp/vllm_full_snapshot.txt && \
+    rm -f /tmp/torch_constraints.txt && \
     mkdir -p /root/.cache/modelscope/_github /opt && \
     git clone --depth 1 https://github.com/NVIDIA/Megatron-LM.git /root/.cache/modelscope/_github/Megatron-LM && \
     make -C /root/.cache/modelscope/_github/Megatron-LM/megatron/core/datasets || true && \
@@ -208,6 +192,7 @@ RUN uv venv /opt/sglang-env --system-site-packages && \
     printf '#!/bin/bash\nexec jupyter lab --ip=0.0.0.0 --port=${JUPYTER_PORT:-8888} --no-browser --allow-root --ServerApp.token="${JUPYTER_TOKEN:-}" --ServerApp.password="" --notebook-dir=/workspace\n' > /usr/local/bin/start-jupyter && \
     chmod +x /usr/local/bin/start-jupyter && \
     printf '%s\n' \
+      '#!/usr/bin/env python3' \
       'import importlib, sys' \
       'MODS = """numpy pyarrow scipy sklearn cv2 pandas pydantic openai' \
       'torch torchvision torchaudio transformers datasets peft trl deepspeed' \
@@ -231,6 +216,7 @@ RUN uv venv /opt/sglang-env --system-site-packages && \
       'print("torch", torch.__version__, "| transformers", transformers.__version__,' \
       '      "| deepspeed", deepspeed.__version__, "| pydantic", pydantic.__version__)' \
       > /usr/local/bin/verify-imports.py && \
+    chmod +x /usr/local/bin/verify-imports.py && \
     python /usr/local/bin/verify-imports.py && \
     { echo "CU=$(nvcc --version | sed -n 's/.*release \([0-9]*\.[0-9]*\).*/\1/p' | head -n 1)"; \
       echo "PY=$(python -V 2>&1 | awk '{print $2}' | cut -d. -f1,2)"; \
@@ -238,13 +224,12 @@ RUN uv venv /opt/sglang-env --system-site-packages && \
       echo "SWIFT=$(python -c 'import swift; print(swift.__version__)')"; \
       echo "TORCH=$(python -c 'import torch; print(torch.__version__)')"; \
       echo "DEEPSPEED=$(python -c 'import deepspeed; print(deepspeed.__version__)')"; \
-      echo "SGLANG=$(/opt/sglang-env/bin/python -c 'import sglang; print(sglang.__version__)' 2>/dev/null || echo unknown)"; \
       echo "FLASH_ATTN=$(python -c 'import flash_attn; print(flash_attn.__version__)' 2>/dev/null || echo none)"; \
     } > /opt/versions.env && cat /opt/versions.env
 
 ENV MAX_JOBS=8 \
     NVCC_THREADS=4
 
-EXPOSE 8888 8000 30000
+EXPOSE 8888 8000
 WORKDIR /workspace
 CMD ["/bin/bash"]
