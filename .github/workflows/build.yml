@@ -1,4 +1,4 @@
-name: Build Image & Export tar.gz to Release / HF
+name: Build Image & Upload Single tar.gz to HuggingFace
 
 on:
   workflow_dispatch:
@@ -7,15 +7,20 @@ on:
         description: 'Docker Image Tag'
         required: true
         default: 'cu133-py312-vllm031-swift46-sglang-rl'
-      export_tar:
-        description: '是否导出 .tar.gz 压缩包并发布到 GitHub Releases 下载？'
+      hf_repo_id:
+        description: '填入你的 HuggingFace 仓库名 (格式: 你的HF用户名/llm-docker-images，若不存在会自动创建)'
+        required: true
+        default: 'yippp/llm-docker-images'
+      hf_private:
+        description: '是否将 HuggingFace 仓库设为私有 (Private)？(公开仓库免登录即可直链下载)'
         type: boolean
         required: true
-        default: true
-      hf_repo_id:
-        description: '(可选) 填入你的 HuggingFace 数据集仓库名以直传完整单文件 tar.gz (需在 Secrets 配 HF_TOKEN)'
-        required: false
-        default: ''
+        default: false
+      upload_github_release:
+        description: '是否同时切分上传一份到 GitHub Releases 作为备用？'
+        type: boolean
+        required: true
+        default: false
 
 jobs:
   build-push-and-export:
@@ -51,10 +56,10 @@ jobs:
           docker build -t local-test:verify .
           df -h
 
-      # 3. 自动化无 Bug 验证（已适配 vLLM 0.31 新版模块结构）
+      # 3. 自动化无 Bug 验证
       - name: Verify CLI Tools, Jupyter, Agents & LLM/VLM/RL Frameworks
         run: |
-          echo "=== [1/4] 验证系统工具、FFmpeg、Jupyter 与 Coding Agents ==="
+          echo "=== [1/3] 验证系统工具、FFmpeg、Jupyter 与 Coding Agents ==="
           docker run --rm local-test:verify bash -c "
             set -e
             conda --version && tmux -V && nvitop --version
@@ -71,14 +76,17 @@ jobs:
             which qmd && qmd --help > /dev/null
           "
 
-          echo "=== [2/4] 验证 Python 3.12、NumPy 1.x/2.x 双兼容护盾与核心库 ==="
+          echo "=== [2/3] 验证 Python 3.12、OpenAI NamespaceTool、vLLM 0.31 与全套库 ==="
           docker run --rm local-test:verify python -c "
-          import sys, numpy as np, pyarrow as pa, scipy, sklearn, cv2, pandas as pd
+          import sys, importlib.metadata as meta
+          import numpy as np, pyarrow as pa, scipy, sklearn, cv2, pandas as pd
+          import openai
+          from openai.types.responses import NamespaceTool
           import torch, torchvision, torchaudio, transformers, datasets, peft, trl, deepspeed
           import modelscope, vllm, swift
           from vllm import LLM, SamplingParams
           import timm, decord, librosa, qwen_vl_utils, qwen_omni_utils
-          import ray, math_verify, gymnasium, wandb, swanlab, fla
+          import ray, math_verify, gymnasium, wandb, swanlab
 
           assert sys.version_info[:2] == (3, 12), f'Python version mismatch: {sys.version}'
           assert int(np.__version__.split('.')[0]) >= 2, f'Expected NumPy 2.x, got {np.__version__}'
@@ -86,6 +94,7 @@ jobs:
 
           print('✅ Python:      ', sys.version.split()[0])
           print('✅ NumPy:       ', np.__version__, '(PyArrow:', pa.__version__, '| 1.x shim active)')
+          print('✅ OpenAI SDK:  ', openai.__version__, '(NamespaceTool verified)')
           print('✅ PyTorch:     ', torch.__version__, '| Vision:', torchvision.__version__, '| CUDA:', torch.version.cuda)
           print('✅ Transformers:', transformers.__version__)
           print('✅ Datasets:    ', datasets.__version__)
@@ -94,19 +103,15 @@ jobs:
           print('✅ Ray:         ', ray.__version__)
           print('✅ vLLM:        ', vllm.__version__)
           print('✅ ms-swift:    ', swift.__version__)
-          print('✅ FLA:         ', fla.__version__)
+          print('✅ FLA:         ', meta.version('flash-linear-attention'))
           "
 
-          echo "=== [3/4] 验证 SGLang、DeepSpeed 预编译算子与 CLI 入口 ==="
+          echo "=== [3/3] 验证 SGLang (/opt/sglang-env)、DeepSpeed 预编译算子与 CLI 入口 ==="
           docker run --rm local-test:verify bash -c "
             set -e
-            if python -c 'import sglang' 2>/dev/null; then
-              python -c 'import sglang; print(\"✅ SGLang (main env):\", sglang.__version__)'
-            else
-              /opt/sglang-env/bin/python -c 'import sglang; print(\"✅ SGLang (/opt/sglang-env):\", sglang.__version__)'
-            fi
+            /opt/sglang-env/bin/python -c 'import sglang; print(\"✅ SGLang (/opt/sglang-env):\", sglang.__version__)'
             ds_report
-            vllm --help > /dev/null
+            which vllm && which swift
             swift --help > /dev/null
             ls -la /root/.cache/modelscope/_github/Megatron-LM
             ls -la /opt/StartLux-Decision
@@ -124,65 +129,93 @@ jobs:
       - name: Push Image to GHCR & Clean Build Cache
         run: |
           OWNER_LOWER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-          IMAGE_URI="ghcr.io/${OWNER_LOWER}/llm-env:${{ github.event.inputs.image_tag }}"
+          TAG="${{ inputs.image_tag || 'cu133-py312-vllm031-swift46-sglang-rl' }}"
+          IMAGE_URI="ghcr.io/${OWNER_LOWER}/llm-env:${TAG}"
           docker tag local-test:verify "$IMAGE_URI"
           docker push "$IMAGE_URI"
           docker builder prune -af || true
           df -h
 
-      # 5. 使用 pigz 4 核极速导出 .tar.gz 并上传到 GitHub Releases & HuggingFace
-      - name: Export .tar.gz and Upload to GitHub Release / HuggingFace
-        if: ${{ inputs.export_tar == true }}
+      # 5. 导出完整单文件 .tar.gz 并直接上传到你的 HuggingFace Dataset 仓库
+      - name: Export Single .tar.gz and Upload Directly to HuggingFace
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           HF_REPO: ${{ inputs.hf_repo_id }}
-          TAG_NAME: ${{ inputs.image_tag }}
+          HF_PRIV: ${{ inputs.hf_private }}
+          DO_GH_RELEASE: ${{ inputs.upload_github_release }}
+          TAG_NAME: ${{ inputs.image_tag || 'cu133-py312-vllm031-swift46-sglang-rl' }}
         run: |
           sudo apt-get update && sudo apt-get install -y pigz
-          mkdir -p /mnt/export
+          EXPORT_DIR="${RUNNER_TEMP}/export"
+          mkdir -p "$EXPORT_DIR"
 
           OWNER_LOWER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           IMAGE_URI="ghcr.io/${OWNER_LOWER}/llm-env:${TAG_NAME}"
-          TAR_GZ_PATH="/mnt/export/llm-env-${TAG_NAME}.tar.gz"
+          TAR_FILE="${EXPORT_DIR}/llm-env-${TAG_NAME}.tar.gz"
 
-          echo "=== [1/3] 正在使用 4 核 pigz 并行导出压缩镜像: ${TAR_GZ_PATH} ==="
-          docker save "$IMAGE_URI" | pigz -fast -p 4 > "$TAR_GZ_PATH"
-          ls -lh "$TAR_GZ_PATH"
-          sha256sum "$TAR_GZ_PATH" > "${TAR_GZ_PATH}.sha256"
+          echo "=== [1/2] 正在使用 4 核 pigz 导出完整单文件压缩包: ${TAR_FILE} ==="
+          docker save "$IMAGE_URI" | pigz -fast -p 4 > "$TAR_FILE"
+          ls -lh "$TAR_FILE"
+          sha256sum "$TAR_FILE" > "${TAR_FILE}.sha256"
 
-          if [ -n "$HF_REPO" ] && [ -n "$HF_TOKEN" ]; then
-            echo "=== [2/3] 检测到 HuggingFace 配置，正在上传完整单文件 .tar.gz 到 ${HF_REPO} ==="
-            pip install -q "huggingface_hub"
-            HF_XET_HIGH_PERFORMANCE=1 huggingface-cli upload "$HF_REPO" "$TAR_GZ_PATH" "llm-env-${TAG_NAME}.tar.gz" --repo-type dataset --token "$HF_TOKEN"
-            echo "✅ 完整单文件已上传至: https://huggingface.co/datasets/${HF_REPO}/tree/main"
+          # 导出完成后立即删掉本地 Docker 镜像，释放 25GB 空间
+          docker rmi -f "$IMAGE_URI" local-test:verify || true
+          df -h
+
+          if [ -n "$HF_TOKEN" ] && [ -n "$HF_REPO" ]; then
+            echo "=== [2/2] 正在将完整单文件 .tar.gz 直传到 HuggingFace: ${HF_REPO} ==="
+            pip install -q --break-system-packages -U "huggingface_hub"
+            HF_XET_HIGH_PERFORMANCE=1 python3 - << 'PYEOF'
+          import os
+          from huggingface_hub import HfApi
+
+          token = os.environ["HF_TOKEN"]
+          repo_id = os.environ["HF_REPO"].strip()
+          is_private = os.environ.get("HF_PRIV", "false").lower() == "true"
+          tar_path = os.environ["TAR_FILE"] if "TAR_FILE" in os.environ else None
+          tag_name = os.environ["TAG_NAME"]
+          export_dir = os.environ["RUNNER_TEMP"] + "/export"
+          fname = f"llm-env-{tag_name}.tar.gz"
+
+          api = HfApi(token=token)
+          # 若仓库不存在则自动创建 Dataset 仓库
+          api.create_repo(repo_id=repo_id, repo_type="dataset", private=is_private, exist_ok=True)
+
+          print(f"Uploading {fname} to HuggingFace dataset {repo_id}...")
+          api.upload_file(
+              path_or_fileobj=f"{export_dir}/{fname}",
+              path_in_repo=fname,
+              repo_id=repo_id,
+              repo_type="dataset",
+              commit_message=f"Upload Docker image {fname}"
+          )
+          api.upload_file(
+              path_or_fileobj=f"{export_dir}/{fname}.sha256",
+              path_in_repo=f"{fname}.sha256",
+              repo_id=repo_id,
+              repo_type="dataset",
+              commit_message=f"Upload SHA256 for {fname}"
+          )
+          print("==================================================================")
+          print(f"✅ 上传成功！完整单文件下载地址：")
+          print(f"🌐 官方直链: https://huggingface.co/datasets/{repo_id}/resolve/main/{fname}")
+          print(f"🚀 国内加速直链: https://hf-mirror.com/datasets/{repo_id}/resolve/main/{fname}")
+          print("==================================================================")
+          PYEOF
+          else
+            echo "⚠️ 未检测到 Secrets 中的 HF_TOKEN，跳过 HuggingFace 上传！"
           fi
 
-          docker rmi -f "$IMAGE_URI" local-test:verify || true
-          echo "=== [3/3] 正在切分为 1900MB 分卷并自动发布到本仓库 GitHub Releases ==="
-          split -b 1900M -d -a 2 "$TAR_GZ_PATH" "${TAR_GZ_PATH}.part"
-          rm -f "$TAR_GZ_PATH"
-          ls -lh /mnt/export/
-
-          RELEASE_TAG="img-${TAG_NAME}"
-          gh release delete "$RELEASE_TAG" -y --cleanup-tag 2>/dev/null || true
-          gh release create "$RELEASE_TAG" /mnt/export/* \
-            --title "Docker Image: ${TAG_NAME}" \
-            --notes "### 📦 镜像下载与还原指南
-
-          **方式一：直接拉取镜像**
-          \`\`\`bash
-          docker pull ${IMAGE_URI}
-          \`\`\`
-
-          **方式二：下载本页下方的分卷包合并为完整 \`.tar.gz\` 或 \`.tar\` 上传算力平台**
-          1. 将下方所有 \`.part00\`, \`.part01\`... 文件下载到同一文件夹。
-          2. **Linux / WSL2 / Mac 合并还原命令**：
-             \`\`\`bash
-             cat llm-env-${TAG_NAME}.tar.gz.part* > llm-env-${TAG_NAME}.tar.gz
-             # 若平台只支持未压缩的 .tar，再执行一行解压：
-             gunzip -c llm-env-${TAG_NAME}.tar.gz > llm-env-${TAG_NAME}.tar
-             \`\`\`
-          3. **Windows (CMD) 合并还原命令**：
-             \`\`\`cmd
-             cmd /c copy /b llm-env-${TAG_NAME}.tar.
+          # (可选) 如果勾选了同时上传 GitHub Release 备份，再切分上传
+          if [ "$DO_GH_RELEASE" = "true" ]; then
+            echo "=== 正在切分上传备份至 GitHub Releases ==="
+            split -b 1900M -d -a 2 "$TAR_FILE" "${TAR_FILE}.part"
+            rm -f "$TAR_FILE"
+            RELEASE_TAG="img-${TAG_NAME}"
+            gh release delete "$RELEASE_TAG" --repo "${{ github.repository }}" -y --cleanup-tag 2>/dev/null || true
+            gh release create "$RELEASE_TAG" "${EXPORT_DIR}"/* \
+              --repo "${{ github.repository }}" \
+              --title "Docker Image: ${TAG_NAME}" \
+              --notes "完整单文件请前往 HuggingFace 下载：https://huggingface.co/datasets/${HF_REPO}/tree/main"
+          fi
