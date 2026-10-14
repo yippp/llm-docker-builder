@@ -21,6 +21,10 @@ on:
         type: boolean
         required: true
         default: false
+      compression_level:
+        description: 'pigz 压缩等级。1 最快体积最大，6 默认折中，9 体积最小但比 6 只小 1~2%；11 为 zopfli，会跑数小时不建议。等级 1 的实测基准：9.6GB / 4分42秒 / 4 核'
+        required: false
+        default: '6'
 
 jobs:
   build-push-and-export:
@@ -55,6 +59,53 @@ jobs:
           PY=$(sed -n 's/^ARG PYTHON_VERSION=\(.*\)$/\1/p' Dockerfile | head -n1)
           echo "Dockerfile 锁定 Python: ${PY}"
           echo "python=${PY}" >> "$GITHUB_OUTPUT"
+
+      # 提前验证 HuggingFace token 的权限，避免构建二十多分钟后才发现传不上去
+      - name: HuggingFace Token Preflight
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_REPO: ${{ inputs.hf_repo_id }}
+          HF_PRIV: ${{ inputs.hf_private }}
+        run: |
+          if [ -z "$HF_TOKEN" ] || [ -z "$HF_REPO" ]; then
+            echo "未配置 HF_TOKEN 或 hf_repo_id，跳过预检（本次不会上传到 HuggingFace）"
+            exit 0
+          fi
+          pip install -q --break-system-packages -U "huggingface_hub"
+          python3 - << 'PYEOF'
+          import os, sys
+          from huggingface_hub import HfApi
+          from huggingface_hub.errors import HfHubHTTPError
+
+          api = HfApi(token=os.environ["HF_TOKEN"])
+          repo_id = os.environ["HF_REPO"].strip()
+          is_private = os.environ.get("HF_PRIV", "false").lower() == "true"
+
+          try:
+              info = api.whoami()
+          except HfHubHTTPError as exc:
+              sys.exit(f"::error::HF_TOKEN 无效或已过期：{exc}")
+
+          tok = (info.get("auth") or {}).get("token") or {}
+          print(f"token 主体: {info.get('name')} | token 名称: {tok.get('displayName')} | 类型: {tok.get('type')}")
+          print(f"token 权限: {tok.get('permissions')}")
+
+          if api.repo_exists(repo_id, repo_type="dataset"):
+              print(f"dataset {repo_id} 已存在，跳过创建")
+          else:
+              try:
+                  api.create_repo(repo_id=repo_id, repo_type="dataset", private=is_private, exist_ok=True)
+                  print(f"已创建 dataset {repo_id}")
+              except HfHubHTTPError as exc:
+                  sys.exit(
+                      "::error::HF_TOKEN 没有创建 dataset 的权限。"
+                      "请在 token 的 User permissions → Repositories 勾选"
+                      "「Create repos and write to repos created by this token」与"
+                      "「Write contents/settings of your repos」；"
+                      "或先在网页上建好该 dataset，再只授予该仓库的写权限。"
+                      f"原始错误：{exc}"
+                  )
+          PYEOF
 
       # 2. 直接在宿主机 Docker Daemon 构建镜像
       - name: Build Docker Image on Host Daemon
@@ -205,10 +256,17 @@ jobs:
           IMAGE_URI="ghcr.io/${OWNER_LOWER}/llm-env:${TAG_NAME}"
           TAR_FILE="${EXPORT_DIR}/llm-env-${TAG_NAME}.tar.gz"
 
-          echo "=== [1/2] 正在使用 4 核 pigz 导出完整单文件压缩包: ${TAR_FILE} ==="
-          # pigz 的 --fast 必须写两个横线：写成 -fast 会被当成短选项簇 -f -a -s -t 解析，
-          # 而 pigz 没有 -a，会以 exit 22 abort
-          docker save "$IMAGE_URI" | pigz --fast -p 4 > "$TAR_FILE"
+          PIGZ_LEVEL="${{ inputs.compression_level || '6' }}"
+          case "$PIGZ_LEVEL" in
+            ''|*[!0-9]*) echo "::error::compression_level 必须是数字，当前为 '$PIGZ_LEVEL'"; exit 1 ;;
+          esac
+
+          echo "=== [1/2] 导出完整单文件压缩包（pigz -${PIGZ_LEVEL}，4 核）: ${TAR_FILE} ==="
+          START=$(date +%s)
+          # pigz 的等级参数必须单独成一个 argv，写成 pigz -6 -p 4；
+          # 不要用 --fast 以外的单横线长词（如 -fast），会被当成短选项簇解析
+          docker save "$IMAGE_URI" | pigz "-${PIGZ_LEVEL}" -p 4 > "$TAR_FILE"
+          echo "压缩耗时 $(( $(date +%s) - START )) 秒"
           ls -lh "$TAR_FILE"
           sha256sum "$TAR_FILE" > "${TAR_FILE}.sha256"
 
@@ -232,8 +290,10 @@ jobs:
           fname = f"llm-env-{tag_name}.tar.gz"
 
           api = HfApi(token=token)
-          # 若仓库不存在则自动创建 Dataset 仓库
-          api.create_repo(repo_id=repo_id, repo_type="dataset", private=is_private, exist_ok=True)
+          # 仓库已存在时不调用 create 接口：只授予单仓库写权限的 token 没有创建权限，
+          # 即使仓库已存在，create 也会直接返回 403
+          if not api.repo_exists(repo_id, repo_type="dataset"):
+              api.create_repo(repo_id=repo_id, repo_type="dataset", private=is_private, exist_ok=True)
 
           print(f"Uploading {fname} to HuggingFace dataset {repo_id}...")
           api.upload_file(
