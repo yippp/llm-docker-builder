@@ -1,5 +1,5 @@
 # ==============================================================================
-# 极速构建 + 算子预编译版 Dockerfile (专为 A800 / H20 / H200 / B300 定制)
+# 极速构建 + 算子预编译版 Dockerfile (适配 A800 / H20 / H200 / B300 )
 # Base: NVIDIA CUDA 13.3.0 Devel + Ubuntu 24.04 (自带 nvcc 13.3)
 # 预编译: DeepSpeed (fused_adam/cpu_adam/aio/utils) + FlashAttn + CausalConv1d + Megatron
 # ==============================================================================
@@ -69,11 +69,12 @@ RUN curl -fsSL https://herdr.dev/install.sh | sh && \
     rm -f /tmp/ck.json
 
 # ------------------------------------------------------------------------------
-# 4. 安装 vLLM 0.31.0 底座，并将 torch/triton 写入约束文件
+# 4. 安装 vLLM 0.31.0 底座，并记录此时 100% 兼容的核心包版本锁
 # ------------------------------------------------------------------------------
 RUN uv pip install --no-cache "vllm==0.31.0" && \
     pip freeze | grep -E "^(torch|triton|torchvision|torchaudio)==" | sed 's/+.*//' > /tmp/torch_constraints.txt && \
-    cat /tmp/torch_constraints.txt
+    pip freeze | grep -E "^(openai|transformers|tokenizers|pydantic|fastapi)==" > /tmp/vllm_golden_lock.txt && \
+    cat /tmp/torch_constraints.txt && cat /tmp/vllm_golden_lock.txt
 
 # ------------------------------------------------------------------------------
 # 5. 秒装预编译 flash-attn 与 causal-conv1d
@@ -99,7 +100,7 @@ RUN PY_TAG=$(python -c "import sys; print(f'cp{sys.version_info.major}{sys.versi
     rm -f /tmp/fa.json /tmp/cc.json
 
 # ------------------------------------------------------------------------------
-# 6. 一次性并发安装 JupyterLab + ms-swift 4.6 + VLM + RL + 决策模型依赖
+# 6. 安装 JupyterLab + ms-swift 4.6 + VLM + RL + 决策模型依赖
 # ------------------------------------------------------------------------------
 RUN uv pip install --no-cache \
     -c /tmp/torch_constraints.txt \
@@ -113,7 +114,7 @@ RUN uv pip install --no-cache \
     "peft>=0.11,<0.21" \
     "trl>=0.15,<1.0" \
     "deepspeed>=0.14,<0.19" \
-    "accelerate" "optimum" "bitsandbytes" "mcore-bridge" "liger-kernel" "kernels>=0.11.1" \
+    "accelerate" "optimum" "bitsandbytes" "mcore-bridge" "liger-kernel" \
     "gradio<5.33" "huggingface_hub" \
     "timm" "qwen-vl-utils" "qwen-omni-utils" "keye-vl-utils" \
     "decord" "av" "opencv-python-headless" "librosa" "soundfile" "einops" \
@@ -142,18 +143,18 @@ RUN VALID_ARCH=$(python -c "import os, torch.utils.cpp_extension as ext; os.envi
     ds_report
 
 # ------------------------------------------------------------------------------
-# 8. 将 SGLang 装入共享 PyTorch 底座的独立环境 (/opt/sglang-env)，绝不降级主环境的 openai/xgrammar
-#    并在最后强制对齐主环境 vllm==0.31.0 + 最新 openai + NumPy 2.2
+# 8. 隔离安装 SGLang + 还原 vLLM 0.31 锁 + 清除 kernels 包
 # ------------------------------------------------------------------------------
 RUN uv venv /opt/sglang-env --system-site-packages && \
     UV_PROJECT_ENVIRONMENT=/opt/sglang-env uv pip install --no-cache -c /tmp/torch_constraints.txt "sglang[all]>=0.5.20" && \
     ln -sf /opt/sglang-env/bin/python /usr/local/bin/sglang-python && \
-    # 重新对齐主环境的 vLLM 0.31.0 依赖，并强制将 openai、numpy、pyarrow 刷到最新兼容版（恢复 NamespaceTool）
-    uv pip install --no-cache -c /tmp/torch_constraints.txt "vllm==0.31.0" && \
-    uv pip install --no-cache --upgrade --no-deps "openai" "numpy>=2.1.0,<2.3.0" "pyarrow>=18.0.0" "kernels>=0.11.1" && \
+    # 彻底卸载会导致 transformers LayerRepository 报错的 kernels 包
+    uv pip uninstall kernels || true && \
+    # 用 --no-deps 精准还原第 4 步 vLLM 0.31 原装的 openai / transformers 与 NumPy 2.2 / PyArrow
+    uv pip install --no-cache --no-deps -r /tmp/vllm_golden_lock.txt "numpy>=2.1.0,<2.3.0" "pyarrow>=18.0.0" && \
     SITE_PKG=$(python -c "import site; print(site.getsitepackages()[0])") && \
     printf "try:\n    import numpy as np\n    for _k, _v in [('float_', np.float64), ('int_', np.int64), ('bool8', np.bool_), ('uint', np.uint64), ('complex_', np.complex128), ('object_', np.object_), ('str_', np.str_), ('unicode_', np.str_), ('NaN', np.nan), ('PINF', np.inf), ('NINF', -np.inf), ('infty', np.inf), ('Inf', np.inf)]:\n        if not hasattr(np, _k):\n            setattr(np, _k, _v)\nexcept Exception:\n    pass\n" >> "${SITE_PKG}/sitecustomize.py" && \
-    rm -f /tmp/torch_constraints.txt && \
+    rm -f /tmp/torch_constraints.txt /tmp/vllm_golden_lock.txt && \
     mkdir -p /root/.cache/modelscope/_github /opt && \
     git clone --depth 1 https://github.com/NVIDIA/Megatron-LM.git /root/.cache/modelscope/_github/Megatron-LM && \
     make -C /root/.cache/modelscope/_github/Megatron-LM/megatron/core/datasets || true && \
@@ -161,8 +162,8 @@ RUN uv venv /opt/sglang-env --system-site-packages && \
     printf "set -g mouse on\nset -g history-limit 50000\nset -g default-terminal 'screen-256color'\nset -g status-bg black\nset -g status-fg green\n" > /root/.tmux.conf && \
     printf '#!/bin/bash\nexec jupyter lab --ip=0.0.0.0 --port=${JUPYTER_PORT:-8888} --no-browser --allow-root --ServerApp.token="${JUPYTER_TOKEN:-}" --ServerApp.password="" --notebook-dir=/workspace\n' > /usr/local/bin/start-jupyter && \
     chmod +x /usr/local/bin/start-jupyter && \
-    # 在 Dockerfile 构建末尾直接内嵌验证，确保 NamespaceTool 与 vLLM 100% 可导入
-    python -c "from openai.types.responses import NamespaceTool; from vllm import LLM, SamplingParams; import swift; print('✅ Dockerfile build-time check passed!')"
+    # 构建期全量导入自检
+    python -c "import sys, numpy as np, pyarrow as pa, scipy, sklearn, cv2, pandas as pd, openai, torch, torchvision, torchaudio, transformers, datasets, peft, trl, deepspeed, modelscope, vllm, swift, timm, decord, librosa, qwen_vl_utils, qwen_omni_utils, ray, math_verify, gymnasium, wandb, swanlab; from openai.types.responses import NamespaceTool; from vllm import LLM, SamplingParams; print('✅ All 28 core packages imported cleanly without conflict!')"
 
 ENV MAX_JOBS=8 \
     NVCC_THREADS=4
