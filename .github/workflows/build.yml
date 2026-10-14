@@ -194,6 +194,9 @@ jobs:
           DO_GH_RELEASE: ${{ inputs.upload_github_release }}
           TAG_NAME: ${{ steps.meta.outputs.tag }}
         run: |
+          # docker save | pigz 是两个进程的管道，不加 pipefail 时 docker save 中途失败
+          # 只会让 pigz 收到 EOF 并正常退出，产出一个截断的 tar.gz 却报成功
+          set -o pipefail
           sudo apt-get update && sudo apt-get install -y pigz
           EXPORT_DIR="${RUNNER_TEMP}/export"
           mkdir -p "$EXPORT_DIR"
@@ -203,7 +206,9 @@ jobs:
           TAR_FILE="${EXPORT_DIR}/llm-env-${TAG_NAME}.tar.gz"
 
           echo "=== [1/2] 正在使用 4 核 pigz 导出完整单文件压缩包: ${TAR_FILE} ==="
-          docker save "$IMAGE_URI" | pigz -fast -p 4 > "$TAR_FILE"
+          # pigz 的 --fast 必须写两个横线：写成 -fast 会被当成短选项簇 -f -a -s -t 解析，
+          # 而 pigz 没有 -a，会以 exit 22 abort
+          docker save "$IMAGE_URI" | pigz --fast -p 4 > "$TAR_FILE"
           ls -lh "$TAR_FILE"
           sha256sum "$TAR_FILE" > "${TAR_FILE}.sha256"
 
