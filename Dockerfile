@@ -101,28 +101,36 @@ RUN uv pip install --no-cache "vllm>=0.31.0" && \
 
 # ------------------------------------------------------------------------------
 # 5. 安装预编译的 flash-attn 与 causal-conv1d
+# flash-attn：mjun0812 的预编译仓库最新的几个 release 全是 ROCm 构建，只取前 10 个
+# release 会全部错过 CUDA 轮子，因此 per_page=100 并排除 rocm；同一个 flash_attn 版本
+# 会同时提供 cu130 和 cu132 两个构建，优先取与 torch.version.cuda 完全一致的那个。
+# causal-conv1d：Dao-AILab 只发布 cu11torch2.6 的轮子，没有 CUDA 13 构建，
+# 当前只能跳过；如需该算子，改为源码编译。
 # ------------------------------------------------------------------------------
 RUN PY_TAG=$(python -c "import sys; print(f'cp{sys.version_info.major}{sys.version_info.minor}')") && \
     TORCH_MM=$(python -c "import torch; print('.'.join(torch.__version__.split('+')[0].split('.')[:2]))") && \
+    CUDA_MM=$(python -c "import torch; v=torch.version.cuda or '13.0'; print(''.join(v.split('.')[:2]))") && \
     CUDA_MAJ=$(python -c "import torch; print((torch.version.cuda or '13.0').split('.')[0])") && \
-    echo "Checking prebuilt wheels for Py=${PY_TAG}, Torch=${TORCH_MM}, CUDA=cu${CUDA_MAJ}" && \
-    curl -fsSL "https://api.github.com/repos/mjun0812/flash-attention-prebuild-wheels/releases?per_page=10" -o /tmp/fa.json || echo "[]" > /tmp/fa.json && \
-    FA_URL=$(jq -r --arg py "$PY_TAG" --arg tm "torch${TORCH_MM}" --arg cu "cu${CUDA_MAJ}" \
-      '.[].assets[]?.browser_download_url | select(endswith("linux_x86_64.whl") and contains($py) and contains($tm) and contains($cu))' /tmp/fa.json | head -n 1) && \
+    echo "查找预编译轮子：Py=${PY_TAG}, torch${TORCH_MM}, cu${CUDA_MM}（无匹配时回退到 cu${CUDA_MAJ}）" && \
+    { curl -fsSL "https://api.github.com/repos/mjun0812/flash-attention-prebuild-wheels/releases?per_page=100" -o /tmp/fa.json || echo "[]" > /tmp/fa.json; } && \
+    FA_CAND=$(jq -r --arg py "$PY_TAG" --arg tm "torch${TORCH_MM}" \
+      '.[].assets[]?.browser_download_url | select(endswith("linux_x86_64.whl") and contains($py) and contains($tm) and (contains("rocm") | not))' /tmp/fa.json) && \
+    FA_URL=$( { echo "$FA_CAND" | grep "cu${CUDA_MM}" || echo "$FA_CAND" | grep "cu${CUDA_MAJ}" || true; } \
+      | sed 's|.*/flash_attn-\([^+]*\)+.*|\1 &|' | sort -V -r | head -n 1 | cut -d' ' -f2-) && \
     if [ -n "$FA_URL" ]; then \
-      echo "Installing prebuilt flash-attn: $FA_URL" && \
+      echo "安装预编译 flash-attn: $FA_URL" && \
       uv pip install --no-cache --no-deps "$FA_URL"; \
     else \
-      echo "⚠️  WARNING: 没有匹配的 flash-attn 预编译轮子 (Py=${PY_TAG}, torch${TORCH_MM}, cu${CUDA_MAJ})，镜像内将不含 flash-attn"; \
+      echo "⚠️  WARNING: 没有匹配的 flash-attn 预编译轮子 (Py=${PY_TAG}, torch${TORCH_MM}, cu${CUDA_MM}/cu${CUDA_MAJ})，镜像内将不含 flash-attn"; \
     fi && \
-    curl -fsSL "https://api.github.com/repos/Dao-AILab/causal-conv1d/releases?per_page=5" -o /tmp/cc.json || echo "[]" > /tmp/cc.json && \
+    { curl -fsSL "https://api.github.com/repos/Dao-AILab/causal-conv1d/releases?per_page=20" -o /tmp/cc.json || echo "[]" > /tmp/cc.json; } && \
     CC_URL=$(jq -r --arg py "$PY_TAG" --arg tm "torch${TORCH_MM}" --arg cu "cu${CUDA_MAJ}" \
       '.[].assets[]?.browser_download_url | select(endswith("linux_x86_64.whl") and contains($py) and contains($tm) and contains($cu))' /tmp/cc.json | head -n 1) && \
     if [ -n "$CC_URL" ]; then \
-      echo "Installing prebuilt causal-conv1d: $CC_URL" && \
+      echo "安装预编译 causal-conv1d: $CC_URL" && \
       uv pip install --no-cache --no-deps "$CC_URL"; \
     else \
-      echo "⚠️  WARNING: 没有匹配的 causal-conv1d 预编译轮子 (Py=${PY_TAG}, torch${TORCH_MM}, cu${CUDA_MAJ})，镜像内将不含 causal-conv1d"; \
+      echo "⚠️  WARNING: 上游没有 cu${CUDA_MAJ} + torch${TORCH_MM} 的 causal-conv1d 预编译轮子（Dao-AILab 目前只发 cu11torch2.6），镜像内将不含 causal-conv1d"; \
     fi && \
     rm -f /tmp/fa.json /tmp/cc.json
 
@@ -134,6 +142,9 @@ RUN PY_TAG=$(python -c "import sys; print(f'cp{sys.version_info.major}{sys.versi
 # transformers 的上限，避免装出可以导入但运行时不兼容的 transformers。
 # deepspeed 需 >=0.19.5：该版本才包含 PR#8238（host cxx 编译选项改为 -std=c++20）。
 # vllm 0.31.0 固定 torch==2.13.0，0.18.x 在第 7 步源码编译算子时会编译失败。
+# audioread 必须显式安装：qwen-omni-utils 的 v2_5/audio_process.py 直接 import audioread，
+# 但它的包元数据只声明了 av、librosa、packaging、pillow、requests，一直靠 librosa
+# 传递提供。librosa 1.0.0（2026-08-11）不再依赖 audioread，因此在本文件显式声明。
 # ------------------------------------------------------------------------------
 RUN uv pip install --no-cache \
     -c /tmp/torch_constraints.txt \
@@ -147,7 +158,7 @@ RUN uv pip install --no-cache \
     accelerate optimum bitsandbytes mcore-bridge liger-kernel \
     gradio huggingface_hub \
     timm qwen-vl-utils qwen-omni-utils keye-vl-utils \
-    decord av opencv-python-headless librosa soundfile einops \
+    decord av opencv-python-headless librosa audioread soundfile einops \
     "ray[default]" math_verify gymnasium wandb swanlab tensorboard \
     evalscope icecream py-spy pre-commit \
     "ms-swift>=4.6" && \
@@ -174,8 +185,11 @@ RUN VALID_ARCH=$(python -c "import os, torch.utils.cpp_extension as ext; os.envi
     ds_report
 
 # ------------------------------------------------------------------------------
-# 8. 安装 SGLang，按第 4 步的快照还原 vLLM 的全部依赖版本，最后写出 /opt/versions.env
-#    workflow 读取该文件自动派生镜像 tag，因此库版本更新后 tag 随之变化
+# 8. 安装 SGLang，按第 4 步的快照还原 vLLM 的全部依赖版本
+#    写入 /usr/local/bin/verify-imports.py 做导入检查：一次性报出全部失败模块，
+#    而不是遇到第一个就退出，避免每漏一个依赖就重跑一次完整构建。
+#    最后写出 /opt/versions.env，workflow 读取该文件自动派生镜像 tag，
+#    因此库版本更新后 tag 随之变化。
 # ------------------------------------------------------------------------------
 RUN uv venv /opt/sglang-env --system-site-packages && \
     UV_PROJECT_ENVIRONMENT=/opt/sglang-env uv pip install --no-cache -c /tmp/torch_constraints.txt "sglang[all]>=0.5.20" && \
@@ -193,7 +207,31 @@ RUN uv venv /opt/sglang-env --system-site-packages && \
     printf "set -g mouse on\nset -g history-limit 50000\nset -g default-terminal 'screen-256color'\nset -g status-bg black\nset -g status-fg green\n" > /root/.tmux.conf && \
     printf '#!/bin/bash\nexec jupyter lab --ip=0.0.0.0 --port=${JUPYTER_PORT:-8888} --no-browser --allow-root --ServerApp.token="${JUPYTER_TOKEN:-}" --ServerApp.password="" --notebook-dir=/workspace\n' > /usr/local/bin/start-jupyter && \
     chmod +x /usr/local/bin/start-jupyter && \
-    python -c "import sys, numpy as np, pyarrow as pa, scipy, sklearn, cv2, pandas as pd, pydantic, openai, torch, torchvision, torchaudio, transformers, datasets, peft, trl, deepspeed, modelscope, vllm, swift, timm, decord, librosa, qwen_vl_utils, qwen_omni_utils, ray, math_verify, gymnasium, wandb, swanlab; from openai.types.responses import NamespaceTool; from vllm import LLM, SamplingParams; print('✅ All 29 core packages imported successfully | ms-swift:', swift.__version__, 'pydantic:', pydantic.__version__)" && \
+    printf '%s\n' \
+      'import importlib, sys' \
+      'MODS = """numpy pyarrow scipy sklearn cv2 pandas pydantic openai' \
+      'torch torchvision torchaudio transformers datasets peft trl deepspeed' \
+      'modelscope vllm swift timm decord librosa audioread soundfile einops' \
+      'qwen_vl_utils qwen_omni_utils ray math_verify gymnasium wandb swanlab""".split()' \
+      'failed = []' \
+      'for name in MODS:' \
+      '    try:' \
+      '        importlib.import_module(name)' \
+      '    except Exception as exc:' \
+      '        failed.append(f"{name}: {type(exc).__name__}: {exc}")' \
+      'if failed:' \
+      '    print("以下模块导入失败，共 %d 个:" % len(failed))' \
+      '    for item in failed:' \
+      '        print("  -", item)' \
+      '    sys.exit(1)' \
+      'from openai.types.responses import NamespaceTool' \
+      'from vllm import LLM, SamplingParams' \
+      'import vllm, swift, torch, transformers, deepspeed, pydantic' \
+      'print("全部核心模块导入成功 | vllm", vllm.__version__, "| ms-swift", swift.__version__)' \
+      'print("torch", torch.__version__, "| transformers", transformers.__version__,' \
+      '      "| deepspeed", deepspeed.__version__, "| pydantic", pydantic.__version__)' \
+      > /usr/local/bin/verify-imports.py && \
+    python /usr/local/bin/verify-imports.py && \
     { echo "CU=$(nvcc --version | sed -n 's/.*release \([0-9]*\.[0-9]*\).*/\1/p' | head -n 1)"; \
       echo "PY=$(python -V 2>&1 | awk '{print $2}' | cut -d. -f1,2)"; \
       echo "VLLM=$(python -c 'import vllm; print(vllm.__version__)')"; \

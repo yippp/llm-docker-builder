@@ -11,7 +11,7 @@ GitHub Actions 构建后推送到 GHCR，并导出单个 `.tar.gz` 上传到 Hug
 | Python | 3.12，由 miniforge 安装到 `/opt/conda` |
 | 推理 | vLLM（base 环境）、SGLang（`/opt/sglang-env`，入口 `sglang-python`） |
 | 训练 | ms-swift、DeepSpeed（构建时预编译 fused_adam / cpu_adam / aio / utils 四个算子）、Megatron-LM |
-| 注意力 | flash-attn、causal-conv1d，取自上游预编译轮子；匹配不到时跳过并打印 WARNING |
+| 注意力 | flash-attn，取自 mjun0812 的预编译轮子仓库（排除 ROCm 构建，优先匹配与 torch 一致的 CUDA 小版本）。causal-conv1d 上游只发布 cu11torch2.6，CUDA 13 下取不到，构建时打印 WARNING 后跳过 |
 | 前端工具 | JupyterLab（`start-jupyter`）、Node.js、Bun、npm |
 | 命令行 | tmux、vim、htop、nvtop、fzf、jq、yq、bat、ripgrep、fd、ffmpeg、git-lfs、gh |
 | Coding Agent | herdr、pi、qmd、ck |
@@ -38,20 +38,24 @@ ARG NPM_MAJOR=12
 docker build --build-arg NODE_VERSION=v24.21.0 -t llm-env:test .
 ```
 
-两处版本约束是有意保留的，不要随手放宽：
+以下几处是有意为之，不要随手改动：
 
 - `deepspeed>=0.19.5`。0.19.5 才包含 PR#8238，把 host cxx 编译选项改为 `-std=c++20`。
   vLLM 0.31.0 固定 `torch==2.13.0`，DeepSpeed 0.18.x 在这个 torch 版本上编译算子会失败。
 - `datasets`、`peft`、`trl`、`transformers`、`modelscope` 不写版本上限。ms-swift 的包元数据
   已经声明了精确区间，重复写一份只会与上游冲突；把 vllm 一起列入安装命令，让 uv 同时
   满足 vllm 对 transformers 的上限。
+- `audioread` 显式安装。`qwen-omni-utils` 的代码直接 `import audioread`，但包元数据没有
+  声明这个依赖，过去靠 librosa 传递提供；librosa 1.0.0 起不再依赖 audioread。
 
 Python 版本升级前，先确认 flash-attn 预编译轮子和 DeepSpeed 源码编译支持目标版本。
 Dockerfile 第 2 步会校验实际装出的 Python 版本，不一致时立即失败。
 
 ## 镜像 tag
 
-构建结束时第 8 步会把实际版本写入镜像内的 `/opt/versions.env`：
+构建结束时第 8 步会先跑 `/usr/local/bin/verify-imports.py`（镜像内保留该脚本，可随时重跑），
+它会一次列出全部导入失败的模块，而不是遇到第一个就退出。通过后把实际版本写入镜像内的
+`/opt/versions.env`：
 
 ```
 CU=13.3
@@ -61,7 +65,7 @@ SWIFT=4.6.0
 TORCH=2.13.0
 DEEPSPEED=0.19.7
 SGLANG=0.5.21
-FLASH_ATTN=2.8.3.post2
+FLASH_ATTN=2.8.3
 ```
 
 workflow 读取该文件生成 tag，形如：
@@ -71,6 +75,9 @@ cu133-py312-vllm0.31.0-swift4.6.0-sglang0.5.21-rl
 ```
 
 `workflow_dispatch` 的 `image_tag` 留空即自动派生，填写后使用指定值。
+
+`FLASH_ATTN=none` 表示没匹配到预编译轮子。sglang 依赖的 `flash-attn-4` 只提供
+`flash_attn/cute/` 子包，不会覆盖 flash-attn 2.x 的顶层模块，两者可以共存。
 GHCR 地址为 `ghcr.io/<owner>/llm-env:<tag>`，HuggingFace 上的文件名为 `llm-env-<tag>.tar.gz`。
 
 ## 触发构建
