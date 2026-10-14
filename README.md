@@ -85,7 +85,7 @@ Actions → `Build Image & Upload Single tar.gz to HuggingFace` → Run workflow
 | 输入 | 说明 |
 | --- | --- |
 | `image_tag` | 留空自动派生 |
-| `hf_repo_id` | HuggingFace Dataset 仓库，默认 `yippp/llm-docker-images`，不存在时自动创建 |
+| `hf_repo_id` | HuggingFace Dataset 仓库，默认 `TPAMI/llm-docker-images`，不存在时自动创建。命名空间必须是 **HuggingFace** 用户名，与 GitHub 用户名不一定相同 |
 | `hf_private` | 是否设为私有仓库。公开仓库可免登录直链下载 |
 | `upload_github_release` | 是否额外切分上传一份到 GitHub Releases 作为备份 |
 

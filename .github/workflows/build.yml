@@ -10,7 +10,7 @@ on:
       hf_repo_id:
         description: '填入你的 HuggingFace 仓库名 (格式: 你的HF用户名/llm-docker-images，若不存在会自动创建)'
         required: true
-        default: 'yippp/llm-docker-images'
+        default: 'TPAMI/llm-docker-images'
       hf_private:
         description: '是否将 HuggingFace 仓库设为私有 (Private)？(公开仓库免登录即可直链下载)'
         type: boolean
@@ -86,9 +86,23 @@ jobs:
           except HfHubHTTPError as exc:
               sys.exit(f"::error::HF_TOKEN 无效或已过期：{exc}")
 
+          owner = info.get("name")
+          orgs = [o.get("name") for o in (info.get("orgs") or []) if o.get("name")]
           tok = (info.get("auth") or {}).get("token") or {}
-          print(f"token 主体: {info.get('name')} | token 名称: {tok.get('displayName')} | 类型: {tok.get('type')}")
-          print(f"token 权限: {tok.get('permissions')}")
+          print(f"HF 账号: {owner} | 可写的组织: {orgs or '无'}")
+          print(f"token 名称: {tok.get('displayName') or '(接口未返回)'} | 类型: {tok.get('type') or '(接口未返回)'}")
+          print(f"目标 dataset: {repo_id} | private={is_private}")
+
+          if "/" not in repo_id:
+              sys.exit(f"::error::hf_repo_id 必须是「命名空间/仓库名」的形式，当前为 '{repo_id}'")
+          namespace, name_part = repo_id.split("/", 1)
+          # HuggingFace 与 GitHub 的用户名不一定相同；命名空间写错时 HF 返回的
+          # 403 文案会指向「权限不足」，实际是 token 不属于该命名空间
+          if namespace != owner and namespace not in orgs:
+              sys.exit(
+                  f"::error::命名空间不匹配：HF_TOKEN 属于账号 {owner}，而 hf_repo_id 指向 {repo_id}。"
+                  f"请把 hf_repo_id 改为 {owner}/{name_part}，或改用 {namespace} 账号的 token。"
+              )
 
           if api.repo_exists(repo_id, repo_type="dataset"):
               print(f"dataset {repo_id} 已存在，跳过创建")
@@ -98,11 +112,10 @@ jobs:
                   print(f"已创建 dataset {repo_id}")
               except HfHubHTTPError as exc:
                   sys.exit(
-                      "::error::HF_TOKEN 没有创建 dataset 的权限。"
-                      "请在 token 的 User permissions → Repositories 勾选"
+                      f"::error::在命名空间 {namespace} 下创建 dataset 失败。"
+                      "请确认 token 已勾选 User permissions → Repositories 的"
                       "「Create repos and write to repos created by this token」与"
-                      "「Write contents/settings of your repos」；"
-                      "或先在网页上建好该 dataset，再只授予该仓库的写权限。"
+                      "「Write contents/settings of your repos」。"
                       f"原始错误：{exc}"
                   )
           PYEOF
