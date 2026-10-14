@@ -1,11 +1,28 @@
 # ==============================================================================
-# 极速构建 + 算子预编译版 Dockerfile (专为 A800 / H20 / H200 / B300 )
-# Base: NVIDIA CUDA 13.3.0 Devel + Ubuntu 24.04 (自带 nvcc 13.3)
-# 预编译: DeepSpeed (fused_adam/cpu_adam/aio/utils) + FlashAttn + CausalConv1d + Megatron
+# GPU 训练镜像 Dockerfile，目标卡型 A800 / H20 / H200 / B300
+# 基础镜像：NVIDIA CUDA 13.3.0 Devel + Ubuntu 24.04（含 nvcc 13.3）
+# 构建时预编译：DeepSpeed 算子 (fused_adam/cpu_adam/aio/utils)、FlashAttn、CausalConv1d、Megatron
 # ==============================================================================
-FROM nvcr.io/nvidia/cuda:13.3.0-devel-ubuntu24.04
+ARG CUDA_IMAGE=nvcr.io/nvidia/cuda:13.3.0-devel-ubuntu24.04
+FROM ${CUDA_IMAGE}
 
 SHELL ["/bin/bash", "-c"]
+
+# ------------------------------------------------------------------------------
+# 版本参数：这里只固定工具链版本；Python 库版本全部用 >= 浮动（见第 4、6、8 步），
+# 上游发布新版后重跑 workflow 即可取得，镜像 tag 按镜像内实际版本自动派生。
+# 临时覆盖示例：docker build --build-arg NODE_VERSION=v24.21.0 .
+# ------------------------------------------------------------------------------
+# Python 固定为 3.12，ms-swift 官方建议 3.11 或 3.12。base 环境的 Python 版本由
+# miniforge 安装器版本决定：24.11.3-0 对应 Python 3.12，26.7.2-0 对应 Python 3.14.7。
+# 升级 Python 前，先确认第 5 步的 flash-attn 预编译轮子和第 7 步的 DeepSpeed
+# 源码编译支持该版本。
+ARG MINIFORGE_VERSION=24.11.3-0
+ARG PYTHON_VERSION=3.12
+# npm 12 的 engines 要求 node ^22.22.2 || ^24.15.0 || >=26，因此 node 需 >= 22.22.2。
+# NPM_MAJOR 只固定主版本号：npm@12 取 12.x 中的最新版，不会升到 13 导致构建失败。
+ARG NODE_VERSION=v22.23.3
+ARG NPM_MAJOR=12
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
@@ -39,21 +56,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends --allow-change-
     apt-get clean && rm -rf /var/lib/apt/lists/* && \
     wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 && \
     chmod +x /usr/local/bin/yq && \
-    curl -fsSL "https://github.com/cli/cli/releases/download/v2.67.0/gh_2.67.0_linux_amd64.tar.gz" | tar -xz -C /tmp && \
-    mv /tmp/gh_2.67.0_linux_amd64/bin/gh /usr/local/bin/gh && rm -rf /tmp/gh_*
+    curl -fsSL https://api.github.com/repos/cli/cli/releases/latest -o /tmp/gh.json && \
+    GH_URL=$(jq -r '.assets[].browser_download_url | select(endswith("linux_amd64.tar.gz"))' /tmp/gh.json | head -n 1) && \
+    test -n "$GH_URL" && curl -fsSL "$GH_URL" -o /tmp/gh.tgz && \
+    tar -xzf /tmp/gh.tgz -C /tmp && \
+    mv /tmp/gh_*_linux_amd64/bin/gh /usr/local/bin/gh && \
+    rm -rf /tmp/gh_* /tmp/gh.tgz && gh --version
 
 # ------------------------------------------------------------------------------
-# 2. 极速安装 Conda (Python 3.12) + Node.js v22 + Bun + 升级最新 pip / uv / npm
+# 2. 安装 Conda（Python 版本见 PYTHON_VERSION）+ Node.js + Bun，并升级 pip / uv / npm
 # ------------------------------------------------------------------------------
-RUN wget -q https://github.com/conda-forge/miniforge/releases/download/24.11.3-0/Miniforge3-24.11.3-0-Linux-x86_64.sh -O /tmp/miniforge.sh && \
+RUN wget -q https://github.com/conda-forge/miniforge/releases/download/${MINIFORGE_VERSION}/Miniforge3-${MINIFORGE_VERSION}-Linux-x86_64.sh -O /tmp/miniforge.sh && \
     bash /tmp/miniforge.sh -b -p ${CONDA_DIR} && \
     rm -f /tmp/miniforge.sh && \
     ${CONDA_DIR}/bin/conda init bash && \
     echo "conda activate base" >> /root/.bashrc && \
-    curl -fsSL https://nodejs.org/dist/v22.19.0/node-v22.19.0-linux-x64.tar.xz | tar -xJ --strip-components=1 -C /usr/local && \
+    ${CONDA_DIR}/bin/python -c "import sys; v=f'{sys.version_info[0]}.{sys.version_info[1]}'; assert v=='${PYTHON_VERSION}', f'miniforge ${MINIFORGE_VERSION} 安装的是 Python {v}，与要求的 ${PYTHON_VERSION} 不一致；请同步修改 MINIFORGE_VERSION 与 PYTHON_VERSION'; print('Python', v, 'OK')" && \
+    curl -fsSL https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-linux-x64.tar.xz | tar -xJ --strip-components=1 -C /usr/local && \
     curl -fsSL https://bun.sh/install | bash && \
     pip install --no-cache-dir -U pip setuptools wheel uv && \
-    npm install -g npm@latest && npm cache clean --force
+    npm install -g npm@${NPM_MAJOR} && npm cache clean --force && \
+    node -v && npm -v && bun -v
 
 # ------------------------------------------------------------------------------
 # 3. 安装 AI Coding Agent 套件: herdr + pi + BeaconBay/ck + qmd
@@ -70,14 +93,14 @@ RUN curl -fsSL https://herdr.dev/install.sh | sh && \
     rm -f /tmp/ck.json
 
 # ------------------------------------------------------------------------------
-# 4. 安装纯净 vLLM 0.31.0 底座，并导出【全量快照锁】/tmp/vllm_full_snapshot.txt
+# 4. 安装 vLLM（>=0.31.0 浮动），并把当时的全部已安装包版本导出到 /tmp/vllm_full_snapshot.txt
 # ------------------------------------------------------------------------------
-RUN uv pip install --no-cache "vllm==0.31.0" && \
+RUN uv pip install --no-cache "vllm>=0.31.0" && \
     pip freeze | grep -E "^(torch|triton|torchvision|torchaudio)==" | sed 's/+.*//' > /tmp/torch_constraints.txt && \
     pip freeze | grep '==' | grep -vE '^(pip|setuptools|wheel|uv|numpy|pyarrow)==' | sed 's/+.*//' > /tmp/vllm_full_snapshot.txt
 
 # ------------------------------------------------------------------------------
-# 5. 秒装预编译 flash-attn 与 causal-conv1d
+# 5. 安装预编译的 flash-attn 与 causal-conv1d
 # ------------------------------------------------------------------------------
 RUN PY_TAG=$(python -c "import sys; print(f'cp{sys.version_info.major}{sys.version_info.minor}')") && \
     TORCH_MM=$(python -c "import torch; print('.'.join(torch.__version__.split('+')[0].split('.')[:2]))") && \
@@ -89,6 +112,8 @@ RUN PY_TAG=$(python -c "import sys; print(f'cp{sys.version_info.major}{sys.versi
     if [ -n "$FA_URL" ]; then \
       echo "Installing prebuilt flash-attn: $FA_URL" && \
       uv pip install --no-cache --no-deps "$FA_URL"; \
+    else \
+      echo "⚠️  WARNING: 没有匹配的 flash-attn 预编译轮子 (Py=${PY_TAG}, torch${TORCH_MM}, cu${CUDA_MAJ})，镜像内将不含 flash-attn"; \
     fi && \
     curl -fsSL "https://api.github.com/repos/Dao-AILab/causal-conv1d/releases?per_page=5" -o /tmp/cc.json || echo "[]" > /tmp/cc.json && \
     CC_URL=$(jq -r --arg py "$PY_TAG" --arg tm "torch${TORCH_MM}" --arg cu "cu${CUDA_MAJ}" \
@@ -96,35 +121,41 @@ RUN PY_TAG=$(python -c "import sys; print(f'cp{sys.version_info.major}{sys.versi
     if [ -n "$CC_URL" ]; then \
       echo "Installing prebuilt causal-conv1d: $CC_URL" && \
       uv pip install --no-cache --no-deps "$CC_URL"; \
+    else \
+      echo "⚠️  WARNING: 没有匹配的 causal-conv1d 预编译轮子 (Py=${PY_TAG}, torch${TORCH_MM}, cu${CUDA_MAJ})，镜像内将不含 causal-conv1d"; \
     fi && \
     rm -f /tmp/fa.json /tmp/cc.json
 
 # ------------------------------------------------------------------------------
-# 6. 并发安装 JupyterLab + 正式版 ms-swift 4.6 + VLM + RL + 决策模型依赖
+# 6. 安装 JupyterLab + ms-swift（>=4.6 浮动）+ VLM / RL / 决策模型依赖
+# datasets、peft、trl、transformers、modelscope 不写版本上限：ms-swift 的元数据已经
+# 声明了精确区间（datasets<4.8.5,>=4.0、peft<0.21、trl<1.0、transformers<5.20），
+# 这里再写一份会与上游声明冲突。vllm 也列入本次解析，使 uv 同时满足 vllm 对
+# transformers 的上限，避免装出可以导入但运行时不兼容的 transformers。
+# deepspeed 需 >=0.19.5：该版本才包含 PR#8238（host cxx 编译选项改为 -std=c++20）。
+# vllm 0.31.0 固定 torch==2.13.0，0.18.x 在第 7 步源码编译算子时会编译失败。
 # ------------------------------------------------------------------------------
 RUN uv pip install --no-cache \
     -c /tmp/torch_constraints.txt \
+    "vllm>=0.31.0" \
     nvitop ast-grep-cli pybind11 wheel packaging ninja psutil \
     jupyterlab notebook ipykernel ipywidgets \
     matplotlib pandas seaborn scipy scikit-learn \
     flash-linear-attention \
-    "transformers>=5.10.4" \
-    "modelscope>=1.23.0" \
-    "datasets>=3.0,<4.8.5" \
-    "peft>=0.11,<0.21" \
-    "trl>=0.15,<1.0" \
-    "deepspeed>=0.14,<0.19" \
-    "accelerate" "optimum" "bitsandbytes" "mcore-bridge" "liger-kernel" \
-    "gradio<5.33" "huggingface_hub" \
-    "timm" "qwen-vl-utils" "qwen-omni-utils" "keye-vl-utils" \
-    "decord" "av" "opencv-python-headless" "librosa" "soundfile" "einops" \
-    "ray[default]" "math_verify" "gymnasium" "wandb" "swanlab" "tensorboard" \
-    "evalscope>=1.0" "icecream" "py-spy" "pre-commit" \
-    "ms-swift==4.6.*" && \
-    python -m ipykernel install --sys-prefix --name python312 --display-name "Python 3.12 (CUDA 13.3 + vLLM + Swift 4.6)"
+    transformers modelscope datasets peft trl \
+    "deepspeed>=0.19.5" \
+    accelerate optimum bitsandbytes mcore-bridge liger-kernel \
+    gradio huggingface_hub \
+    timm qwen-vl-utils qwen-omni-utils keye-vl-utils \
+    decord av opencv-python-headless librosa soundfile einops \
+    "ray[default]" math_verify gymnasium wandb swanlab tensorboard \
+    evalscope icecream py-spy pre-commit \
+    "ms-swift>=4.6" && \
+    PY_TAG=$(python -c "import sys; print(f'python{sys.version_info[0]}{sys.version_info[1]}')") && \
+    python -m ipykernel install --sys-prefix --name "$PY_TAG" --display-name "Python ${PYTHON_VERSION} (CUDA + vLLM + ms-swift)"
 
 # ------------------------------------------------------------------------------
-# 7. 针对 A800(8.0) / H20&H200(9.0) / B300(10.0;10.3) 预编译 DeepSpeed 4 大核心算子
+# 7. 为 A800(8.0) / H20、H200(9.0) / B300(10.0;10.3) 预编译 DeepSpeed 的 4 个算子
 # ------------------------------------------------------------------------------
 RUN VALID_ARCH=$(python -c "import os, torch.utils.cpp_extension as ext; os.environ['TORCH_CUDA_ARCH_LIST']='8.0;9.0;10.0;10.3'; \
       ext._get_cuda_arch_flags(); print('8.0;9.0;10.0;10.3')" 2>/dev/null || echo "8.0;9.0;10.0+PTX") && \
@@ -143,14 +174,15 @@ RUN VALID_ARCH=$(python -c "import os, torch.utils.cpp_extension as ext; os.envi
     ds_report
 
 # ------------------------------------------------------------------------------
-# 8. 隔离安装 SGLang + 按全量快照精确还原 vLLM 0.31 所有配对依赖
+# 8. 安装 SGLang，按第 4 步的快照还原 vLLM 的全部依赖版本，最后写出 /opt/versions.env
+#    workflow 读取该文件自动派生镜像 tag，因此库版本更新后 tag 随之变化
 # ------------------------------------------------------------------------------
 RUN uv venv /opt/sglang-env --system-site-packages && \
     UV_PROJECT_ENVIRONMENT=/opt/sglang-env uv pip install --no-cache -c /tmp/torch_constraints.txt "sglang[all]>=0.5.20" && \
     ln -sf /opt/sglang-env/bin/python /usr/local/bin/sglang-python && \
     uv pip uninstall kernels || true && \
-    # 完整还原第 4 步 vLLM 0.31.0 安装时的全部配对包快照，不会出现任何 pydantic / pydantic-core 不匹配
-    uv pip install --no-cache --no-deps -r /tmp/vllm_full_snapshot.txt "numpy>=2.1.0,<2.3.0" "pyarrow>=18.0.0" && \
+    # 按第 4 步的快照还原全部依赖版本，避免 pydantic 与 pydantic-core 版本不匹配
+    uv pip install --no-cache --no-deps -r /tmp/vllm_full_snapshot.txt "numpy>=2.1.0" "pyarrow>=18.0.0" && \
     SITE_PKG=$(python -c "import site; print(site.getsitepackages()[0])") && \
     printf "try:\n    import numpy as np\n    for _k, _v in [('float_', np.float64), ('int_', np.int64), ('bool8', np.bool_), ('uint', np.uint64), ('complex_', np.complex128), ('object_', np.object_), ('str_', np.str_), ('unicode_', np.str_), ('NaN', np.nan), ('PINF', np.inf), ('NINF', -np.inf), ('infty', np.inf), ('Inf', np.inf)]:\n        if not hasattr(np, _k):\n            setattr(np, _k, _v)\nexcept Exception:\n    pass\n" >> "${SITE_PKG}/sitecustomize.py" && \
     rm -f /tmp/torch_constraints.txt /tmp/vllm_full_snapshot.txt && \
@@ -161,7 +193,16 @@ RUN uv venv /opt/sglang-env --system-site-packages && \
     printf "set -g mouse on\nset -g history-limit 50000\nset -g default-terminal 'screen-256color'\nset -g status-bg black\nset -g status-fg green\n" > /root/.tmux.conf && \
     printf '#!/bin/bash\nexec jupyter lab --ip=0.0.0.0 --port=${JUPYTER_PORT:-8888} --no-browser --allow-root --ServerApp.token="${JUPYTER_TOKEN:-}" --ServerApp.password="" --notebook-dir=/workspace\n' > /usr/local/bin/start-jupyter && \
     chmod +x /usr/local/bin/start-jupyter && \
-    python -c "import sys, numpy as np, pyarrow as pa, scipy, sklearn, cv2, pandas as pd, pydantic, openai, torch, torchvision, torchaudio, transformers, datasets, peft, trl, deepspeed, modelscope, vllm, swift, timm, decord, librosa, qwen_vl_utils, qwen_omni_utils, ray, math_verify, gymnasium, wandb, swanlab; from openai.types.responses import NamespaceTool; from vllm import LLM, SamplingParams; print('✅ All 29 core packages imported cleanly! ms-swift:', swift.__version__, 'pydantic:', pydantic.__version__)"
+    python -c "import sys, numpy as np, pyarrow as pa, scipy, sklearn, cv2, pandas as pd, pydantic, openai, torch, torchvision, torchaudio, transformers, datasets, peft, trl, deepspeed, modelscope, vllm, swift, timm, decord, librosa, qwen_vl_utils, qwen_omni_utils, ray, math_verify, gymnasium, wandb, swanlab; from openai.types.responses import NamespaceTool; from vllm import LLM, SamplingParams; print('✅ All 29 core packages imported successfully | ms-swift:', swift.__version__, 'pydantic:', pydantic.__version__)" && \
+    { echo "CU=$(nvcc --version | sed -n 's/.*release \([0-9]*\.[0-9]*\).*/\1/p' | head -n 1)"; \
+      echo "PY=$(python -V 2>&1 | awk '{print $2}' | cut -d. -f1,2)"; \
+      echo "VLLM=$(python -c 'import vllm; print(vllm.__version__)')"; \
+      echo "SWIFT=$(python -c 'import swift; print(swift.__version__)')"; \
+      echo "TORCH=$(python -c 'import torch; print(torch.__version__)')"; \
+      echo "DEEPSPEED=$(python -c 'import deepspeed; print(deepspeed.__version__)')"; \
+      echo "SGLANG=$(/opt/sglang-env/bin/python -c 'import sglang; print(sglang.__version__)' 2>/dev/null || echo unknown)"; \
+      echo "FLASH_ATTN=$(python -c 'import flash_attn; print(flash_attn.__version__)' 2>/dev/null || echo none)"; \
+    } > /opt/versions.env && cat /opt/versions.env
 
 ENV MAX_JOBS=8 \
     NVCC_THREADS=4
