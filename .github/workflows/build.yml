@@ -141,7 +141,13 @@ jobs:
           fi
 
           echo "=== 从镜像内 /opt/versions.env 读取实际版本 ==="
-          docker run --rm local-test:verify cat /opt/versions.env | tee /tmp/versions.env
+          # 基础镜像启动时会向 stdout 打印 NGC 许可横幅，只保留 KEY=VALUE 行
+          docker run --rm local-test:verify cat /opt/versions.env | grep -E '^[A-Z_][A-Z0-9_]*=' > /tmp/versions.env || true
+          if [ ! -s /tmp/versions.env ]; then
+            echo "::error::没能从镜像读到 /opt/versions.env 的有效内容"
+            exit 1
+          fi
+          cat /tmp/versions.env
           set -a
           . /tmp/versions.env
           set +a

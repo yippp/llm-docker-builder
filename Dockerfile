@@ -131,9 +131,9 @@ RUN PY_TAG=$(python -c "import sys; print(f'cp{sys.version_info.major}{sys.versi
 # transformers 的上限，避免装出可以导入但运行时不兼容的 transformers。
 # deepspeed 需 >=0.19.5：该版本才包含 PR#8238（host cxx 编译选项改为 -std=c++20）。
 # vllm 0.31.0 固定 torch==2.13.0，0.18.x 在第 7 步源码编译算子时会编译失败。
-# swanlab 需 >=0.10：不写下限时 uv 会为了保住 protobuf 7.x 把 swanlab 退到 0.6.4。
-# swanlab 0.10.2 要求 protobuf<7，而 protobuf 6.33.5/6.33.6 同时满足 vllm、
-# tensorboard、wandb、onnx 与 ray 的约束，写下限后 uv 会回退 protobuf 而不是 swanlab。
+# swanlab 上限 <0.9.0，实际装到 0.8.5。swanlab 自 0.6.5 起就要求 protobuf<7，
+# 因此 protobuf 会落在 6.33.x（vllm 排除的是 6.33.0.*~6.33.4.*，6.33.5/6.33.6 可用）。
+# 已对镜像内 391 个包全量扫描，无一拒绝 protobuf 6.33.6。
 # audioread 必须显式安装：qwen-omni-utils 的 v2_5/audio_process.py 直接 import audioread，
 # 但它的包元数据只声明了 av、librosa、packaging、pillow、requests，一直靠 librosa
 # 传递提供。librosa 1.0.0（2026-08-11）不再依赖 audioread，因此在本文件显式声明。
@@ -152,7 +152,7 @@ RUN uv pip install --no-cache \
     timm qwen-vl-utils qwen-omni-utils keye-vl-utils \
     decord av opencv-python-headless librosa audioread soundfile einops \
     "ray[default]" math_verify gymnasium wandb tensorboard \
-    "swanlab>=0.10" \
+    "swanlab<0.9.0" \
     evalscope icecream py-spy pre-commit \
     "ms-swift>=4.6" \
     "numpy>=2.1.0" "pyarrow>=18.0.0" && \
@@ -219,17 +219,30 @@ RUN SITE_PKG=$(python -c "import site; print(site.getsitepackages()[0])") && \
       'print("全部核心模块导入成功 | vllm", vllm.__version__, "| ms-swift", swift.__version__)' \
       'print("torch", torch.__version__, "| transformers", transformers.__version__,' \
       '      "| deepspeed", deepspeed.__version__, "| pydantic", pydantic.__version__)' \
+      'import importlib.metadata as md' \
+      'def _ver(pkg):' \
+      '    try:' \
+      '        return md.version(pkg)' \
+      '    except Exception:' \
+      '        return "none"' \
+      'print("已写出 /opt/versions.env:")' \
+      'with open("/opt/versions.env", "w") as fh:' \
+      '    for key, val in [' \
+      '        ("PY", f"{sys.version_info[0]}.{sys.version_info[1]}"),' \
+      '        ("VLLM", vllm.__version__),' \
+      '        ("SWIFT", swift.__version__),' \
+      '        ("TORCH", torch.__version__),' \
+      '        ("DEEPSPEED", deepspeed.__version__),' \
+      '        ("FLASH_ATTN", _ver("flash-attn")),' \
+      '    ]:' \
+      '        line = key + "=" + str(val)' \
+      '        fh.write(line + "\n")' \
+      '        print(" ", line)' \
       > /usr/local/bin/verify-imports.py && \
     chmod +x /usr/local/bin/verify-imports.py && \
     python /usr/local/bin/verify-imports.py && \
-    { echo "CU=$(nvcc --version | sed -n 's/.*release \([0-9]*\.[0-9]*\).*/\1/p' | head -n 1)"; \
-      echo "PY=$(python -V 2>&1 | awk '{print $2}' | cut -d. -f1,2)"; \
-      echo "VLLM=$(python -c 'import vllm; print(vllm.__version__)')"; \
-      echo "SWIFT=$(python -c 'import swift; print(swift.__version__)')"; \
-      echo "TORCH=$(python -c 'import torch; print(torch.__version__)')"; \
-      echo "DEEPSPEED=$(python -c 'import deepspeed; print(deepspeed.__version__)')"; \
-      echo "FLASH_ATTN=$(python -c 'import flash_attn; print(flash_attn.__version__)' 2>/dev/null || echo none)"; \
-    } > /opt/versions.env && cat /opt/versions.env
+    echo "CU=$(nvcc --version | sed -n 's/.*release \([0-9]*\.[0-9]*\).*/\1/p' | head -n 1)" | cat - /opt/versions.env > /tmp/v.env && \
+    mv /tmp/v.env /opt/versions.env && cat /opt/versions.env
 
 ENV MAX_JOBS=8 \
     NVCC_THREADS=4
