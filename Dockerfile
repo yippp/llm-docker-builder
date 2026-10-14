@@ -131,8 +131,9 @@ RUN PY_TAG=$(python -c "import sys; print(f'cp{sys.version_info.major}{sys.versi
 # transformers 的上限，避免装出可以导入但运行时不兼容的 transformers。
 # deepspeed 需 >=0.19.5：该版本才包含 PR#8238（host cxx 编译选项改为 -std=c++20）。
 # vllm 0.31.0 固定 torch==2.13.0，0.18.x 在第 7 步源码编译算子时会编译失败。
-# swanlab 上限 <0.9.0，实际装到 0.8.5。swanlab 自 0.6.5 起就要求 protobuf<7，
-# 因此 protobuf 会落在 6.33.x（vllm 排除的是 6.33.0.*~6.33.4.*，6.33.5/6.33.6 可用）。
+# swanlab 需 >=0.10：不写下限时 uv 为了保住 protobuf 7.x 会把 swanlab 退回 0.6.4
+# （0.6.4 不约束 protobuf，0.6.5 起要求 protobuf<7，0.8.5 与 0.10.2 的约束完全相同）。
+# 写下限后 protobuf 落在 6.33.x：vllm 排除的是 6.33.0.*~6.33.4.*，6.33.5/6.33.6 可用；
 # 已对镜像内 391 个包全量扫描，无一拒绝 protobuf 6.33.6。
 # audioread 必须显式安装：qwen-omni-utils 的 v2_5/audio_process.py 直接 import audioread，
 # 但它的包元数据只声明了 av、librosa、packaging、pillow、requests，一直靠 librosa
@@ -152,7 +153,7 @@ RUN uv pip install --no-cache \
     timm qwen-vl-utils qwen-omni-utils keye-vl-utils \
     decord av opencv-python-headless librosa audioread soundfile einops \
     "ray[default]" math_verify gymnasium wandb tensorboard \
-    "swanlab<0.9.0" \
+    "swanlab>=0.10" \
     evalscope icecream py-spy pre-commit \
     "ms-swift>=4.6" \
     "numpy>=2.1.0" "pyarrow>=18.0.0" && \
