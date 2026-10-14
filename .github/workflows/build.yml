@@ -121,7 +121,7 @@ jobs:
             set -e
             ds_report
             which vllm && which swift
-            swift --help > /dev/null
+            swift sft --help > /dev/null
             ls -la /root/.cache/modelscope/_github/Megatron-LM
             ls -la /opt/StartLux-Decision
           "

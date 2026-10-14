@@ -131,6 +131,9 @@ RUN PY_TAG=$(python -c "import sys; print(f'cp{sys.version_info.major}{sys.versi
 # transformers 的上限，避免装出可以导入但运行时不兼容的 transformers。
 # deepspeed 需 >=0.19.5：该版本才包含 PR#8238（host cxx 编译选项改为 -std=c++20）。
 # vllm 0.31.0 固定 torch==2.13.0，0.18.x 在第 7 步源码编译算子时会编译失败。
+# swanlab 需 >=0.10：不写下限时 uv 会为了保住 protobuf 7.x 把 swanlab 退到 0.6.4。
+# swanlab 0.10.2 要求 protobuf<7，而 protobuf 6.33.5/6.33.6 同时满足 vllm、
+# tensorboard、wandb、onnx 与 ray 的约束，写下限后 uv 会回退 protobuf 而不是 swanlab。
 # audioread 必须显式安装：qwen-omni-utils 的 v2_5/audio_process.py 直接 import audioread，
 # 但它的包元数据只声明了 av、librosa、packaging、pillow、requests，一直靠 librosa
 # 传递提供。librosa 1.0.0（2026-08-11）不再依赖 audioread，因此在本文件显式声明。
@@ -148,7 +151,8 @@ RUN uv pip install --no-cache \
     gradio huggingface_hub \
     timm qwen-vl-utils qwen-omni-utils keye-vl-utils \
     decord av opencv-python-headless librosa audioread soundfile einops \
-    "ray[default]" math_verify gymnasium wandb swanlab tensorboard \
+    "ray[default]" math_verify gymnasium wandb tensorboard \
+    "swanlab>=0.10" \
     evalscope icecream py-spy pre-commit \
     "ms-swift>=4.6" \
     "numpy>=2.1.0" "pyarrow>=18.0.0" && \
@@ -197,7 +201,7 @@ RUN SITE_PKG=$(python -c "import site; print(site.getsitepackages()[0])") && \
       'MODS = """numpy pyarrow scipy sklearn cv2 pandas pydantic openai' \
       'torch torchvision torchaudio transformers datasets peft trl deepspeed' \
       'modelscope vllm swift timm decord librosa audioread soundfile einops' \
-      'qwen_vl_utils qwen_omni_utils ray math_verify gymnasium wandb swanlab""".split()' \
+      'qwen_vl_utils qwen_omni_utils ray math_verify gymnasium wandb swanlab tensorboard""".split()' \
       'failed = []' \
       'for name in MODS:' \
       '    try:' \
