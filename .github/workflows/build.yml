@@ -1,4 +1,4 @@
-name: Build All-in-One LLM & Agent Docker Image
+name: Build All-in-One LLM, VLM, RL & Decision Model Image
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
       image_tag:
         description: 'Docker Image Tag'
         required: true
-        default: 'cu133-py312-vllm031-swift46-sglang'
+        default: 'cu133-py312-vllm031-swift46-sglang-rl'
 
 jobs:
   build-and-push:
@@ -20,7 +20,6 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # 1. 清理 GitHub Runner 磁盘，释放出 105GB+ 空间
       - name: Free Disk Space (105GB+)
         uses: jlumbroso/free-disk-space@main
         with:
@@ -35,7 +34,6 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # 2. 本地构建镜像用于严格自检
       - name: Build Image Locally
         uses: docker/build-push-action@v6
         with:
@@ -45,18 +43,18 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # 3. 自动化无 Bug 验证（验证所有 CLI、Jupyter、Agent 与大模型框架 C++ 符号表）
-      - name: Verify All Frameworks, Jupyter & Agents
+      - name: Verify All Frameworks, VLM, RL, Decision Kernels & Agents
         run: |
           docker run --rm local-test:verify bash -c "
             set -e
-            echo '=== [1/4] 检查系统与检索工具 ==='
+            echo '=== [1/5] 检查系统工具、FFmpeg 与 CUDA 13.3 ==='
             conda --version && tmux -V && nvitop --version
+            ffmpeg -version | head -n 1
             rg --version | head -n 1 && fd --version && ast-grep --version
             jq --version && yq --version && gh --version | head -n 1
             nvcc --version | grep '13.3'
 
-            echo '=== [2/4] 检查 JupyterLab / Notebook 与 AI Agent 工具链 ==='
+            echo '=== [2/5] 检查 JupyterLab 与 AI Coding Agent 工具链 ==='
             jupyter lab --version
             jupyter notebook --version
             jupyter kernelspec list | grep 'python312'
@@ -66,27 +64,38 @@ jobs:
             which ck && ck --version
             which qmd && qmd --help > /dev/null
 
-            echo '=== [3/4] 检查 Python 3.12 与大模型框架/C++算子兼容性 ==='
+            echo '=== [3/5] 检查 LLM / VLM / RL / 决策模型 Python 栈兼容性 ==='
             python -c '
-          import sys, torch, transformers, modelscope, vllm, vllm._C, sglang, swift, jupyterlab
+          import sys, torch, transformers, datasets, peft, trl, deepspeed
+          import modelscope, vllm, vllm._C, sglang, swift
+          import timm, decord, librosa, qwen_vl_utils, qwen_omni_utils
+          import ray, math_verify, gymnasium, wandb, swanlab, fla
+
           assert sys.version_info[:2] == (3, 12), f\"Python version mismatch: {sys.version}\"
           print(\"✅ Python:       \", sys.version.split()[0])
           print(\"✅ PyTorch:      \", torch.__version__, \"(CUDA:\", torch.version.cuda, \")\")
           print(\"✅ Transformers: \", transformers.__version__)
+          print(\"✅ Datasets:     \", datasets.__version__, \"(Locked <4.8.5 for Swift 4.6)\")
+          print(\"✅ TRL (RLHF):   \", trl.__version__)
+          print(\"✅ DeepSpeed:    \", deepspeed.__version__)
+          print(\"✅ Ray (RL):     \", ray.__version__)
           print(\"✅ vLLM:         \", vllm.__version__)
           print(\"✅ SGLang:       \", sglang.__version__)
           print(\"✅ ms-swift:     \", swift.__version__)
-          print(\"✅ JupyterLab:   \", jupyterlab.__version__)
+          print(\"✅ FLA (Linear): \", fla.__version__)
           '
 
-            echo '=== [4/4] 检查核心框架 CLI 入口 ==='
+            echo '=== [4/5] 检查预置源码库 (Megatron-LM & StartLux-Decision) ==='
+            ls -la /root/.cache/modelscope/_github/Megatron-LM
+            ls -la /opt/StartLux-Decision
+
+            echo '=== [5/5] 检查核心 CLI 入口 ==='
             vllm --help > /dev/null
             swift --help > /dev/null
             python -m sglang.launch_server --help > /dev/null
-            echo '🎉 全部验证 100% 通过！准备推送镜像...'
+            echo '🎉 全栈 LLM + VLM + RL + Jev/StartLux 决策模型镜像 100% 验证通过！'
           "
 
-      # 4. 登录并推送到 GitHub 官方镜像仓库 (GHCR)
       - name: Log in to GitHub Container Registry (GHCR)
         uses: docker/login-action@v3
         with:
