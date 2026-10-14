@@ -2,6 +2,7 @@
 # 极速构建 + 算子预编译版 Dockerfile (专为 A800 / H20 / H200 / B300 定制)
 # Base: NVIDIA CUDA 13.3.0 Devel + Ubuntu 24.04 (自带 nvcc 13.3)
 # 预编译: DeepSpeed (fused_adam/cpu_adam/aio/utils) + FlashAttn + CausalConv1d + Megatron
+# 兼容层: NumPy 2.x C-ABI + sitecustomize.py 自动注入 NumPy 1.x 别名向后兼容补丁
 # ==============================================================================
 FROM nvcr.io/nvidia/cuda:13.3.0-devel-ubuntu24.04
 
@@ -69,11 +70,10 @@ RUN curl -fsSL https://herdr.dev/install.sh | sh && \
     rm -f /tmp/ck.json
 
 # ------------------------------------------------------------------------------
-# 4. 安装 vLLM 0.31.0 底座，并同时锁定 PyTorch 与 NumPy >= 2.0.0 
+# 4. 安装 vLLM 0.31.0 底座，仅将 torch/triton 写入约束文件 (防 uv 解析器死锁)
 # ------------------------------------------------------------------------------
-RUN uv pip install --no-cache "vllm==0.31.0" "numpy>=2.0.0,<2.3.0" && \
+RUN uv pip install --no-cache "vllm==0.31.0" && \
     pip freeze | grep -E "^(torch|triton|torchvision|torchaudio)==" | sed 's/+.*//' > /tmp/torch_constraints.txt && \
-    echo "numpy>=2.0.0,<2.3.0" >> /tmp/torch_constraints.txt && \
     cat /tmp/torch_constraints.txt
 
 # ------------------------------------------------------------------------------
@@ -101,11 +101,9 @@ RUN PY_TAG=$(python -c "import sys; print(f'cp{sys.version_info.major}{sys.versi
 
 # ------------------------------------------------------------------------------
 # 6. 一次性并发安装 JupyterLab + ms-swift 4.6 + VLM + RL + 决策模型依赖
-#    (已适配 huggingface_hub>=1.33.0 Xet 高速引擎)
 # ------------------------------------------------------------------------------
 RUN uv pip install --no-cache \
     -c /tmp/torch_constraints.txt \
-    "numpy>=2.0.0,<2.3.0" \
     nvitop ast-grep-cli pybind11 wheel packaging ninja psutil \
     jupyterlab notebook ipykernel ipywidgets \
     matplotlib pandas seaborn scipy scikit-learn \
@@ -117,12 +115,12 @@ RUN uv pip install --no-cache \
     "trl>=0.15,<1.0" \
     "deepspeed>=0.14,<0.19" \
     "accelerate" "optimum" "bitsandbytes" "mcore-bridge" "liger-kernel" \
-    "gradio<5.33" "huggingface_hub>=1.0.0" \
+    "gradio<5.33" "huggingface_hub" \
     "timm" "qwen-vl-utils" "qwen-omni-utils" "keye-vl-utils" \
     "decord" "av" "opencv-python-headless" "librosa" "soundfile" "einops" \
     "ray[default]" "math_verify" "gymnasium" "wandb" "swanlab" "tensorboard" \
     "evalscope>=1.0" "icecream" "py-spy" "pre-commit" \
-    "ms-swift[all]@git+https://github.com/modelscope/ms-swift.git@main" && \
+    "ms-swift@git+https://github.com/modelscope/ms-swift.git@main" && \
     python -m ipykernel install --sys-prefix --name python312 --display-name "Python 3.12 (CUDA 13.3 + vLLM + Swift 4.6)"
 
 # ------------------------------------------------------------------------------
@@ -145,13 +143,16 @@ RUN VALID_ARCH=$(python -c "import os, torch.utils.cpp_extension as ext; os.envi
     ds_report
 
 # ------------------------------------------------------------------------------
-# 8. 智能安装 SGLang + 强制锁死主环境 NumPy >= 2.0 
+# 8. 智能安装 SGLang + 强制锁定 NumPy 2.2 C-ABI + 注入 NumPy 1.x 旧别名兼容补丁
 # ------------------------------------------------------------------------------
 RUN (uv pip install --no-cache -c /tmp/torch_constraints.txt "sglang[all]>=0.5.20") || \
     (uv venv /opt/sglang-env --system-site-packages && \
      UV_PROJECT_ENVIRONMENT=/opt/sglang-env uv pip install --no-cache "sglang[all]>=0.5.20") && \
-    # 最终防线：无论任何次级依赖是否篡改了 NumPy，强制保证主环境 NumPy >= 2.0.0 以兼容 pyarrow/datasets/vllm
-    uv pip install --no-cache -c /tmp/torch_constraints.txt "numpy>=2.0.0,<2.3.0" "pyarrow>=18.0.0" && \
+    # 强制对齐主环境 NumPy 2.2 与 PyArrow，确保所有 C++/Cython 扩展二进制 ABI 100% 匹配
+    uv pip install --no-cache --no-deps --force-reinstall "numpy>=2.1.0,<2.3.0" "pyarrow>=18.0.0" && \
+    # 写入 sitecustomize.py 护盾：自动把 NumPy 1.x 废弃的别名挂回 numpy，防止任何老旧第三方脚本报 AttributeError
+    SITE_PKG=$(python -c "import site; print(site.getsitepackages()[0])") && \
+    printf "try:\n    import numpy as np\n    for _k, _v in [('float_', np.float64), ('int_', np.int64), ('bool8', np.bool_), ('uint', np.uint64), ('complex_', np.complex128), ('object_', np.object_), ('str_', np.str_), ('unicode_', np.str_), ('NaN', np.nan), ('PINF', np.inf), ('NINF', -np.inf), ('infty', np.inf), ('Inf', np.inf)]:\n        if not hasattr(np, _k):\n            setattr(np, _k, _v)\nexcept Exception:\n    pass\n" >> "${SITE_PKG}/sitecustomize.py" && \
     rm -f /tmp/torch_constraints.txt && \
     mkdir -p /root/.cache/modelscope/_github /opt && \
     git clone --depth 1 https://github.com/NVIDIA/Megatron-LM.git /root/.cache/modelscope/_github/Megatron-LM && \
