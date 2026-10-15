@@ -30,6 +30,9 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LC_ALL=C.UTF-8 \
     TZ=Asia/Hong_Kong \
     TORCH_CUDA_ARCH_LIST="8.0;9.0;10.0;10.3" \
+    # gptqmodel 的 setup.py 只认不带前缀的 CUDA_ARCH_LIST（探测顺序：该变量 →
+    # nvidia-smi），GitHub runner 没有 GPU 和 nvidia-smi，不设则源码编译直接报错
+    CUDA_ARCH_LIST="8.0;9.0;10.0;10.3" \
     CONDA_DIR=/opt/conda \
     PATH=/root/.local/bin:/root/.bun/bin:/opt/conda/bin:/usr/local/cuda/bin:$PATH \
     LD_LIBRARY_PATH=/usr/local/cuda/compat:/usr/local/cuda/lib64:$LD_LIBRARY_PATH \
