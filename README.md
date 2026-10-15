@@ -12,12 +12,15 @@ GitHub Actions 构建后推送到 GHCR，并导出单个 `.tar.gz` 上传到 Hug
 | 推理 | vLLM |
 | 训练 | ms-swift、DeepSpeed（构建时预编译 fused_adam / cpu_adam / aio / utils 四个算子）、Megatron-LM |
 | 注意力 | flash-attn，取自 mjun0812 的预编译轮子仓库（排除 ROCm 构建，优先匹配与 torch 一致的 CUDA 小版本） |
-| 前端工具 | JupyterLab（`start-jupyter`）、Node.js、Bun、npm |
-| 命令行 | tmux、vim、htop、nvtop、fzf、jq、yq、bat、ripgrep、fd、ffmpeg、git-lfs、gh |
+| 前端工具 | JupyterLab（`start-jupyter`，含 git 面板、内存表、LSP 代码智能、单元格耗时、ipympl 五个插件）、VS Code 浏览器版（`start-code-server`，端口 8080）、Node.js、Bun、npm |
+| 命令行 | tmux、vim、htop、nvtop、fzf、jq、yq、bat、ffmpeg、git-lfs、gh、rsync；rg/fzf/zoxide/lazygit 取上游最新静态二进制 |
+| Shell | zsh（root 默认，bash 保留跑脚本）：fzf-tab Tab 模糊补全、zsh-autosuggestions 灰色历史提示、zsh-syntax-highlighting 语法高亮、`z <目录关键词>` 按历史跳转、fzf 快捷键 |
+| 中文字体 | Noto Sans CJK + Noto Color Emoji，matplotlib 默认字体已配好，图表中文不再是方框 |
 | Coding Agent | herdr、pi、qmd、ck |
 | 其他 | `/opt/StartLux-Decision`、`/root/.cache/modelscope/_github/Megatron-LM` |
 
-暴露端口 `8888`（Jupyter）、`8000`（vLLM）。默认工作目录 `/workspace`。
+暴露端口 `8888`（Jupyter）、`8000`（vLLM）、`8080`（code-server）。默认工作目录 `/workspace`。
+容器内 `python` 直接就是 `/opt/conda` 的 base 环境，无需 `conda activate`；SSH 登录会话由 `/etc/profile.d/zz-conda-path.sh` 保证同样的 PATH。
 
 ## 版本策略
 
@@ -104,9 +107,14 @@ docker run --gpus all -it --rm \
 # 容器内启动 Jupyter
 start-jupyter
 
+# 浏览器版 VS Code（端口 8080；首次启动时 stdout 会打印生成的密码文件路径）
+start-code-server
+
 # 随时重跑导入检查
 verify-imports.py
 ```
+
+Shell 小抄：`z <关键词>` 按历史跳目录，Tab 补全支持模糊筛选，Ctrl-R 搜历史命令，Ctrl-T 搜文件。
 
 从 HuggingFace 下载后导入：
 

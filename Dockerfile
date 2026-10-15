@@ -36,14 +36,18 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
     UV_SYSTEM_PYTHON=1 \
     UV_HTTP_TIMEOUT=300 \
-    HF_XET_HIGH_PERFORMANCE=1
+    HF_XET_HIGH_PERFORMANCE=1 \
+    HF_HUB_ENABLE_HF_TRANSFER=1
 
 # ------------------------------------------------------------------------------
-# 1. 单次 apt-get 安装系统工具、FFmpeg、libaio-dev (DeepSpeed AIO 必需) 与 RDMA 库
+# 1. 单次 apt-get 安装系统工具、FFmpeg、libaio-dev (DeepSpeed AIO 必需)、RDMA 库、
+#    zsh 及两个补全插件与中文字体（图表和终端的中文不再显示为方框）
 # ------------------------------------------------------------------------------
 RUN apt-get update && apt-get install -y --no-install-recommends --allow-change-held-packages \
     tmux vim nano htop nvtop iotop lsof tree fzf jq bat \
     ripgrep fd-find \
+    zsh zsh-autosuggestions zsh-syntax-highlighting \
+    fonts-noto-cjk fonts-noto-color-emoji \
     ffmpeg libavcodec-dev libavformat-dev libswscale-dev libsndfile1-dev libsox-dev \
     git git-lfs curl wget unzip zip tar xz-utils zstd rsync \
     net-tools iproute2 iputils-ping openssh-client openssh-server sudo ca-certificates gnupg \
@@ -61,7 +65,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends --allow-change-
     test -n "$GH_URL" && curl -fsSL "$GH_URL" -o /tmp/gh.tgz && \
     tar -xzf /tmp/gh.tgz -C /tmp && \
     mv /tmp/gh_*_linux_amd64/bin/gh /usr/local/bin/gh && \
-    rm -rf /tmp/gh_* /tmp/gh.tgz && gh --version
+    rm -rf /tmp/gh_* /tmp/gh.tgz && gh --version && \
+    curl -fsSL https://code-server.dev/install.sh | sh -s -- --method=standalone --prefix=/usr/local && \
+    rm -rf /tmp/fetch && mkdir -p /tmp/fetch && \
+    for spec in "BurntSushi/ripgrep|ripgrep-VER-x86_64-unknown-linux-musl.tar.gz|rg" \
+                "junegunn/fzf|fzf-VER-linux_amd64.tar.gz|fzf" \
+                "ajeetdsouza/zoxide|zoxide-VER-x86_64-unknown-linux-musl.tar.gz|zoxide" \
+                "jesseduffield/lazygit|lazygit_VER_Linux_x86_64.tar.gz|lazygit"; do \
+      repo="${spec%%|*}"; rest="${spec#*|}"; tpl="${rest%%|*}"; bin="${rest##*|}"; \
+      tag=$(curl -fsSL -o /dev/null -w '%{url_effective}' "https://github.com/$repo/releases/latest"); tag="${tag##*/}"; \
+      ver="${tag#v}"; \
+      asset="https://github.com/$repo/releases/download/$tag/$(printf '%s' "$tpl" | sed "s/VER/$ver/")"; \
+      echo "拉取 $repo $tag"; \
+      rm -rf /tmp/fetch && mkdir -p /tmp/fetch && \
+      curl -fsSL "$asset" | tar -xz -C /tmp/fetch && \
+      install -m 755 "$(find /tmp/fetch -type f -name "$bin" | head -n 1)" "/usr/local/bin/$bin"; \
+    done && \
+    rg --version | head -n 1 && fzf --version && zoxide --version && lazygit --version | head -n 1 && \
+    git clone --depth 1 https://github.com/Aloxaf/fzf-tab.git /opt/zsh-plugins/fzf-tab
 
 # ------------------------------------------------------------------------------
 # 2. 安装 Conda（Python 版本见 PYTHON_VERSION）+ Node.js + Bun，并升级 pip / uv / npm
@@ -146,6 +167,7 @@ RUN uv pip install --no-cache \
     "vllm>=0.31.0" \
     nvitop ast-grep-cli pybind11 wheel packaging ninja psutil \
     jupyterlab notebook ipykernel ipywidgets \
+    jupyterlab-git jupyter-resource-usage jupyterlab-lsp python-lsp-server jupyterlab-execute-time ipympl \
     matplotlib pandas seaborn scipy scikit-learn \
     flash-linear-attention \
     transformers modelscope datasets peft trl \
@@ -156,7 +178,7 @@ RUN uv pip install --no-cache \
     decord av opencv-python-headless librosa audioread soundfile einops \
     "ray[default]" math_verify gymnasium wandb tensorboard \
     "swanlab[dashboard]==0.7.19" "swanboard==0.1.9b3" \
-    evalscope icecream py-spy pre-commit \
+    evalscope icecream py-spy pre-commit hf_transfer gpustat pycocotools \
     "ms-swift>=4.6" \
     "numpy>=2.1.0" "pyarrow>=18.0.0" && \
     PY_TAG=$(python -c "import sys; print(f'python{sys.version_info[0]}{sys.version_info[1]}')") && \
@@ -190,12 +212,19 @@ RUN VALID_ARCH=$(python -c "import os, torch.utils.cpp_extension as ext; os.envi
 # ------------------------------------------------------------------------------
 RUN SITE_PKG=$(python -c "import site; print(site.getsitepackages()[0])") && \
     printf "try:\n    import numpy as np\n    for _k, _v in [('float_', np.float64), ('int_', np.int64), ('bool8', np.bool_), ('uint', np.uint64), ('complex_', np.complex128), ('object_', np.object_), ('str_', np.str_), ('unicode_', np.str_), ('NaN', np.nan), ('PINF', np.inf), ('NINF', -np.inf), ('infty', np.inf), ('Inf', np.inf)]:\n        if not hasattr(np, _k):\n            setattr(np, _k, _v)\nexcept Exception:\n    pass\n" >> "${SITE_PKG}/sitecustomize.py" && \
+    printf '\nfont.sans-serif: Noto Sans CJK SC, DejaVu Sans\naxes.unicode_minus: False\n' >> "${SITE_PKG}/matplotlib/mpl-data/matplotlibrc" && \
     rm -f /tmp/torch_constraints.txt && \
     mkdir -p /root/.cache/modelscope/_github /opt && \
     git clone --depth 1 https://github.com/NVIDIA/Megatron-LM.git /root/.cache/modelscope/_github/Megatron-LM && \
     make -C /root/.cache/modelscope/_github/Megatron-LM/megatron/core/datasets || true && \
     git clone --depth 1 https://github.com/StartLuxLabs/Startlux-Decision.git /opt/StartLux-Decision && \
     printf "set -g mouse on\nset -g history-limit 50000\nset -g default-terminal 'screen-256color'\nset -g status-bg black\nset -g status-fg green\n" > /root/.tmux.conf && \
+    printf 'HISTFILE="$HOME/.zsh_history"\nHISTSIZE=50000\nSAVEHIST=50000\nsetopt SHARE_HISTORY HIST_IGNORE_DUPS HIST_REDUCE_BLANKS\nautoload -Uz compinit && compinit\nsource /opt/zsh-plugins/fzf-tab/fzf-tab.plugin.zsh\neval "$(fzf --zsh 2>/dev/null)"\neval "$(zoxide init zsh)"\nsource /usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh\nsource /usr/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh\n' > /root/.zshrc && \
+    cp /root/.zshrc /etc/skel/.zshrc && \
+    usermod -s /bin/zsh root && \
+    printf 'export PATH=/opt/conda/bin:/usr/local/cuda/bin:$PATH\nexport LD_LIBRARY_PATH=/usr/local/cuda/compat:/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}\n' > /etc/profile.d/zz-conda-path.sh && \
+    printf '#!/bin/bash\nexec code-server --bind-addr 0.0.0.0:${CODE_SERVER_PORT:-8080} --auth password\n' > /usr/local/bin/start-code-server && \
+    chmod +x /usr/local/bin/start-code-server && \
     printf '#!/bin/bash\nexec jupyter lab --ip=0.0.0.0 --port=${JUPYTER_PORT:-8888} --no-browser --allow-root --ServerApp.token="${JUPYTER_TOKEN:-}" --ServerApp.password="" --notebook-dir=/workspace\n' > /usr/local/bin/start-jupyter && \
     chmod +x /usr/local/bin/start-jupyter && \
     printf '%s\n' \
@@ -204,7 +233,7 @@ RUN SITE_PKG=$(python -c "import site; print(site.getsitepackages()[0])") && \
       'MODS = """numpy pyarrow scipy sklearn cv2 pandas pydantic openai' \
       'torch torchvision torchaudio transformers datasets peft trl deepspeed' \
       'modelscope vllm swift timm decord librosa audioread soundfile einops' \
-      'qwen_vl_utils qwen_omni_utils ray math_verify gymnasium wandb swanlab swanboard tensorboard""".split()' \
+      'qwen_vl_utils qwen_omni_utils ray math_verify gymnasium wandb swanlab swanboard hf_transfer gpustat pycocotools tensorboard""".split()' \
       'failed = []' \
       'for name in MODS:' \
       '    try:' \
@@ -250,6 +279,6 @@ RUN SITE_PKG=$(python -c "import site; print(site.getsitepackages()[0])") && \
 ENV MAX_JOBS=8 \
     NVCC_THREADS=4
 
-EXPOSE 8888 8000
+EXPOSE 8888 8000 8080
 WORKDIR /workspace
 CMD ["/bin/bash"]
