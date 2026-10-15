@@ -166,8 +166,11 @@ RUN PY_TAG=$(python -c "import sys; print(f'cp{sys.version_info.major}{sys.versi
 # 传递提供。librosa 1.0.0（2026-08-11）不再依赖 audioread，因此在本文件显式声明。
 # gptqmodel 必须钉 5.7.0：5.8.0 起要求 protobuf>=7.34，与 swanlab 0.7.19 的
 # protobuf<7 硬冲突，5.7.0 是最后一个兼容 protobuf 6.x 的版本。它同时把 numpy
-# 精确钉在 2.2.6；llmcompressor 把 transformers 钉在 <=5.17，均与 vllm 0.31.0
-# 的约束区间有交集，解析可满足。
+# 精确钉在 2.2.6，与 vllm 0.31.0 的约束区间有交集，解析可满足。
+# llmcompressor 无法加入：其 0.14.0（最新版）声明支持 transformers 5.15–5.17，
+# 但代码 import 的 TORCH_INIT_FUNCTIONS 在 transformers 5.0 已移除，声明的整个
+# 区间实际都导入失败（已验证 5.15/5.16/5.17 源码）；vllm 0.31.0 又要求
+# transformers>=5.10.4，无回退空间。等上游修好后恢复。
 # ------------------------------------------------------------------------------
 RUN uv pip install --no-cache \
     -c /tmp/torch_constraints.txt \
@@ -180,7 +183,7 @@ RUN uv pip install --no-cache \
     transformers modelscope datasets peft trl \
     "deepspeed>=0.19.5" \
     accelerate optimum bitsandbytes mcore-bridge liger-kernel \
-    "gptqmodel==5.7.0" llmcompressor torchao hqq gguf \
+    "gptqmodel==5.7.0" torchao hqq gguf \
     gradio huggingface_hub \
     timm qwen-vl-utils qwen-omni-utils keye-vl-utils \
     decord av opencv-python-headless librosa audioread soundfile einops \
@@ -242,7 +245,7 @@ RUN SITE_PKG=$(python -c "import site; print(site.getsitepackages()[0])") && \
       'torch torchvision torchaudio transformers datasets peft trl deepspeed' \
       'modelscope vllm swift timm decord librosa audioread soundfile einops' \
       'qwen_vl_utils qwen_omni_utils ray math_verify gymnasium wandb swanlab swanboard hf_transfer gpustat pycocotools' \
-      ' gptqmodel llmcompressor torchao hqq gguf tensorboard""".split()' \
+      ' gptqmodel torchao hqq gguf tensorboard""".split()' \
       'failed = []' \
       'for name in MODS:' \
       '    try:' \

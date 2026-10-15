@@ -11,7 +11,7 @@ GitHub Actions 构建后推送到 GHCR，并导出单个 `.tar.gz` 上传到 Hug
 | Python | 3.12，由 miniforge 安装到 `/opt/conda` |
 | 推理 | vLLM |
 | 训练 | ms-swift、DeepSpeed（构建时预编译 fused_adam / cpu_adam / aio / utils 四个算子）、Megatron-LM |
-| 量化 | gptqmodel 5.7.0（GPTQ）、llmcompressor（FP8/INT8 → compressed-tensors）、torchao、hqq、gguf、bitsandbytes（QLoRA）；推理侧量化内核由 vllm 覆盖 |
+| 量化 | gptqmodel 5.7.0（GPTQ）、torchao（FP8/INT4）、hqq、gguf、bitsandbytes（QLoRA）；推理侧量化内核由 vllm 覆盖。llmcompressor 因与 transformers 5.x 不兼容暂未加入 |
 | 注意力 | flash-attn，取自 mjun0812 的预编译轮子仓库（排除 ROCm 构建，优先匹配与 torch 一致的 CUDA 小版本） |
 | 前端工具 | JupyterLab（`start-jupyter`，含 git 面板、内存表、LSP 代码智能、单元格耗时、ipympl 五个插件）、VS Code 浏览器版（`start-code-server`，端口 8080）、Node.js、Bun、npm |
 | 命令行 | tmux、vim、htop、nvtop、fzf、jq、yq、bat、ffmpeg、git-lfs、gh、rsync；rg/fzf/zoxide/lazygit 取上游最新静态二进制 |
