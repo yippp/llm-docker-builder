@@ -1,0 +1,66 @@
+name: Sync Image to Docker Hub
+
+# 把 GHCR 上已构建好的镜像同步到 Docker Hub，不重新构建。
+# 镜像已在 GHCR 上，这里只做 拉取 → 改 tag → 推送，数据走 runner，
+# 不经过本地。镜像公开时可匿名拉取，登录 GHCR 是为了避免匿名限流，
+# 也让以后转私有后仍然可用。
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: '要同步的镜像 tag（GHCR 与 Docker Hub 同名），留空则用 latest'
+        required: false
+        default: 'latest'
+
+permissions:
+  packages: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Pull from GHCR and Push to Docker Hub
+        env:
+          SRC_IMAGE: ghcr.io/${{ github.repository_owner }}/llm-env:${{ inputs.image_tag }}
+          DST_IMAGE: docker.io/${{ secrets.DOCKERHUB_USERNAME }}/llm-env:${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+          echo "源镜像:   $SRC_IMAGE"
+          echo "目标镜像: $DST_IMAGE"
+          START=$SECONDS
+          docker pull "$SRC_IMAGE"
+          docker image inspect "$SRC_IMAGE" --format '已拉取: {{.Id}} 大小 {{.Size}}'
+          docker tag "$SRC_IMAGE" "$DST_IMAGE"
+          docker push "$DST_IMAGE"
+          echo "同步完成，耗时 $((SECONDS - START)) 秒"
+
+      - name: Verify Pushed Image
+        env:
+          DST_IMAGE: docker.io/${{ secrets.DOCKERHUB_USERNAME }}/llm-env:${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+          # 只验证 manifest 可匿名拉取，即镜像对外可见
+          TOKEN=$(curl -sf "https://auth.docker.io/token?service=registry.docker.io&scope=repository:${{ secrets.DOCKERHUB_USERNAME }}/llm-env:pull" | python3 -c "import json,sys; print(json.load(sys.stdin)['token'])")
+          curl -sf -H "Authorization: Bearer $TOKEN" \
+            -H "Accept: application/vnd.docker.distribution.manifest.v2+json,application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json" \
+            "https://registry-1.docker.io/v2/${{ secrets.DOCKERHUB_USERNAME }}/llm-env/manifests/${{ inputs.image_tag }}" \
+            | python3 -c "
+          import json,sys
+          d=json.load(sys.stdin)
+          layers=d.get('layers') or []
+          print(f\"Docker Hub 上校验通过: mediaType={d.get('mediaType')} 层数={len(layers)} 压缩大小={sum(l.get('size',0) for l in layers)/1024**3:.2f} GB\")
+          "
