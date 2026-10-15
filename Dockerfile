@@ -161,6 +161,10 @@ RUN PY_TAG=$(python -c "import sys; print(f'cp{sys.version_info.major}{sys.versi
 # audioread 必须显式安装：qwen-omni-utils 的 v2_5/audio_process.py 直接 import audioread，
 # 但它的包元数据只声明了 av、librosa、packaging、pillow、requests，一直靠 librosa
 # 传递提供。librosa 1.0.0（2026-08-11）不再依赖 audioread，因此在本文件显式声明。
+# gptqmodel 必须钉 5.7.0：5.8.0 起要求 protobuf>=7.34，与 swanlab 0.7.19 的
+# protobuf<7 硬冲突，5.7.0 是最后一个兼容 protobuf 6.x 的版本。它同时把 numpy
+# 精确钉在 2.2.6；llmcompressor 把 transformers 钉在 <=5.17，均与 vllm 0.31.0
+# 的约束区间有交集，解析可满足。
 # ------------------------------------------------------------------------------
 RUN uv pip install --no-cache \
     -c /tmp/torch_constraints.txt \
@@ -173,6 +177,7 @@ RUN uv pip install --no-cache \
     transformers modelscope datasets peft trl \
     "deepspeed>=0.19.5" \
     accelerate optimum bitsandbytes mcore-bridge liger-kernel \
+    "gptqmodel==5.7.0" llmcompressor torchao hqq gguf \
     gradio huggingface_hub \
     timm qwen-vl-utils qwen-omni-utils keye-vl-utils \
     decord av opencv-python-headless librosa audioread soundfile einops \
@@ -233,7 +238,8 @@ RUN SITE_PKG=$(python -c "import site; print(site.getsitepackages()[0])") && \
       'MODS = """numpy pyarrow scipy sklearn cv2 pandas pydantic openai' \
       'torch torchvision torchaudio transformers datasets peft trl deepspeed' \
       'modelscope vllm swift timm decord librosa audioread soundfile einops' \
-      'qwen_vl_utils qwen_omni_utils ray math_verify gymnasium wandb swanlab swanboard hf_transfer gpustat pycocotools tensorboard""".split()' \
+      'qwen_vl_utils qwen_omni_utils ray math_verify gymnasium wandb swanlab swanboard hf_transfer gpustat pycocotools' \
+      ' gptqmodel llmcompressor torchao hqq gguf tensorboard""".split()' \
       'failed = []' \
       'for name in MODS:' \
       '    try:' \

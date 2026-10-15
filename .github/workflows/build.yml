@@ -163,6 +163,7 @@ jobs:
           from vllm import LLM, SamplingParams
           import timm, decord, librosa, qwen_vl_utils, qwen_omni_utils
           import ray, math_verify, gymnasium, wandb, swanlab, swanboard, hf_transfer, gpustat, pycocotools
+          import gptqmodel, llmcompressor, torchao, hqq, gguf
 
           _exp = os.environ.get('EXPECTED_PY', '')
           _got = f'{sys.version_info[0]}.{sys.version_info[1]}'
