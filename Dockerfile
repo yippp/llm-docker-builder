@@ -132,8 +132,9 @@ RUN PY_TAG=$(python -c "import sys; print(f'cp{sys.version_info.major}{sys.versi
 # deepspeed 需 >=0.19.5：该版本才包含 PR#8238（host cxx 编译选项改为 -std=c++20）。
 # vllm 0.31.0 固定 torch==2.13.0，0.18.x 在第 7 步源码编译算子时会编译失败。
 # swanlab 锁在 0.7.19 并启用 dashboard extra：swanlab watch 直接本地看数据，
-# 不用再起一个单独的容器跑服务端。dashboard 会带 swanboard==0.1.9b3（依赖只有
-# fastapi/peewee/uvicorn 等轻量包，与 vllm 栈无冲突）。
+# 不用再起一个单独的容器跑服务端。swanboard 显式锁 0.1.9b3（与 swanlab 0.7.19
+# dashboard extra 的要求一致），依赖只有 fastapi/peewee/uvicorn 等轻量包，
+# 与 vllm 栈无冲突。
 # protobuf 落在 6.33.x：0.6.5 起就要求 protobuf<7，vllm 排除的是 6.33.0.*~6.33.4.*，
 # 6.33.5/6.33.6 可用；已对镜像内 391 个包全量扫描，无一拒绝 protobuf 6.33.6。
 # audioread 必须显式安装：qwen-omni-utils 的 v2_5/audio_process.py 直接 import audioread，
@@ -154,7 +155,7 @@ RUN uv pip install --no-cache \
     timm qwen-vl-utils qwen-omni-utils keye-vl-utils \
     decord av opencv-python-headless librosa audioread soundfile einops \
     "ray[default]" math_verify gymnasium wandb tensorboard \
-    "swanlab[dashboard]==0.7.19" \
+    "swanlab[dashboard]==0.7.19" "swanboard==0.1.9b3" \
     evalscope icecream py-spy pre-commit \
     "ms-swift>=4.6" \
     "numpy>=2.1.0" "pyarrow>=18.0.0" && \
