@@ -45,7 +45,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends --allow-change-
     tmux vim nano htop nvtop iotop lsof tree fzf jq bat \
     ripgrep fd-find \
     ffmpeg libavcodec-dev libavformat-dev libswscale-dev libsndfile1-dev libsox-dev \
-    git git-lfs curl wget unzip zip tar xz-utils zstd \
+    git git-lfs curl wget unzip zip tar xz-utils zstd rsync \
     net-tools iproute2 iputils-ping openssh-client openssh-server sudo ca-certificates gnupg \
     build-essential cmake ninja-build pkg-config \
     libnuma-dev libaio-dev libssl-dev libffi-dev libgl1 libglib2.0-0 \
