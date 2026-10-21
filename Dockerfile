@@ -1,5 +1,5 @@
 # ==============================================================================
-# GPU 训练镜像 Dockerfile，目标卡型 A800 / H20 / H200 / B300
+# GPU 训练镜像 Dockerfile，目标卡型 A800 / H20 / H200
 # 基础镜像：NVIDIA CUDA 13.3.0 Devel + Ubuntu 24.04（含 nvcc 13.3）
 # 构建时预编译：DeepSpeed 算子 (fused_adam/cpu_adam/aio/utils)、FlashAttn、Megatron
 # ==============================================================================
@@ -29,10 +29,12 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
     TZ=Asia/Hong_Kong \
-    TORCH_CUDA_ARCH_LIST="8.0;9.0;10.0;10.3" \
+    TORCH_CUDA_ARCH_LIST="8.0;9.0" \
     # gptqmodel 的 setup.py 只认不带前缀的 CUDA_ARCH_LIST（探测顺序：该变量 →
-    # nvidia-smi），GitHub runner 没有 GPU 和 nvidia-smi，不设则源码编译直接报错
-    CUDA_ARCH_LIST="8.0;9.0;10.0;10.3" \
+    # nvidia-smi），GitHub runner 没有 GPU 和 nvidia-smi，不设则源码编译直接报错。
+    # 架构列表只在这两处维护，第 7 步的 DeepSpeed 编译读同一份 ENV。
+    # 需要 B300 时不必加回 10.0;10.3，改成 "8.0;9.0+PTX" 由驱动即时编译即可。
+    CUDA_ARCH_LIST="8.0;9.0" \
     CONDA_DIR=/opt/conda \
     PATH=/root/.local/bin:/root/.bun/bin:/opt/conda/bin:/usr/local/cuda/bin:$PATH \
     LD_LIBRARY_PATH=/usr/local/cuda/compat:/usr/local/cuda/lib64:$LD_LIBRARY_PATH \
@@ -117,10 +119,10 @@ RUN curl -fsSL https://herdr.dev/install.sh | sh && \
     rm -f /tmp/ck.json
 
 # ------------------------------------------------------------------------------
-# 4. 安装 vLLM（>=0.31.0 浮动），并把 torch 系列的实际版本导出为 /tmp/torch_constraints.txt，
+# 4. 安装 vLLM（>=0.32.0 浮动），并把 torch 系列的实际版本导出为 /tmp/torch_constraints.txt，
 #    供第 6、7 步作为约束使用，避免后续安装把 torch 换成与 vLLM 不配对的版本
 # ------------------------------------------------------------------------------
-RUN uv pip install --no-cache "vllm>=0.31.0" && \
+RUN uv pip install --no-cache "vllm>=0.32.0" && \
     pip freeze | grep -E "^(torch|triton|torchvision|torchaudio)==" | sed 's/+.*//' > /tmp/torch_constraints.txt
 
 # ------------------------------------------------------------------------------
@@ -154,7 +156,7 @@ RUN PY_TAG=$(python -c "import sys; print(f'cp{sys.version_info.major}{sys.versi
 # 这里再写一份会与上游声明冲突。vllm 也列入本次解析，使 uv 同时满足 vllm 对
 # transformers 的上限，避免装出可以导入但运行时不兼容的 transformers。
 # deepspeed 需 >=0.19.5：该版本才包含 PR#8238（host cxx 编译选项改为 -std=c++20）。
-# vllm 0.31.0 固定 torch==2.13.0，0.18.x 在第 7 步源码编译算子时会编译失败。
+# vllm 0.32.0 固定 torch==2.13.0，0.18.x 在第 7 步源码编译算子时会编译失败。
 # swanlab 锁在 0.7.19 并启用 dashboard extra：swanlab watch 直接本地看数据，
 # 不用再起一个单独的容器跑服务端。swanboard 显式锁 0.1.9b3（与 swanlab 0.7.19
 # dashboard extra 的要求一致），依赖只有 fastapi/peewee/uvicorn 等轻量包，
@@ -166,24 +168,27 @@ RUN PY_TAG=$(python -c "import sys; print(f'cp{sys.version_info.major}{sys.versi
 # 传递提供。librosa 1.0.0（2026-08-11）不再依赖 audioread，因此在本文件显式声明。
 # gptqmodel 必须钉 5.7.0：5.8.0 起要求 protobuf>=7.34，与 swanlab 0.7.19 的
 # protobuf<7 硬冲突，5.7.0 是最后一个兼容 protobuf 6.x 的版本。它同时把 numpy
-# 精确钉在 2.2.6，与 vllm 0.31.0 的约束区间有交集，解析可满足。
+# 精确钉在 2.2.6，与 vllm 0.32.0 的约束区间有交集，解析可满足。
 # llmcompressor 无法加入：其 0.14.0（最新版）声明支持 transformers 5.15–5.17，
 # 但代码 import 的 TORCH_INIT_FUNCTIONS 在 transformers 5.0 已移除，声明的整个
-# 区间实际都导入失败（已验证 5.15/5.16/5.17 源码）；vllm 0.31.0 又要求
+# 区间实际都导入失败（已验证 5.15/5.16/5.17 源码）；vllm 0.32.0 又要求
 # transformers>=5.10.4，无回退空间。等上游修好后恢复。
 # ------------------------------------------------------------------------------
 RUN uv pip install --no-cache \
     -c /tmp/torch_constraints.txt \
-    "vllm>=0.31.0" \
+    "vllm>=0.32.0" \
     nvitop ast-grep-cli pybind11 wheel packaging ninja psutil \
     jupyterlab notebook ipykernel ipywidgets \
     jupyterlab-git jupyter-resource-usage jupyterlab-lsp python-lsp-server jupyterlab-execute-time ipympl \
+    jupyter-server-proxy jupyterlab-iframe tornado-proxy-handlers ipylab \
+    jupyterlab-nvdashboard ipydatagrid anywidget itables plotly bokeh \
     matplotlib pandas seaborn scipy scikit-learn \
     flash-linear-attention \
-    transformers modelscope datasets peft trl \
+    transformers modelscope datasets peft trl sentencepiece \
     "deepspeed>=0.19.5" \
     accelerate optimum bitsandbytes mcore-bridge liger-kernel \
     "gptqmodel==5.7.0" torchao hqq gguf \
+    netcal torchmetrics system-one jev \
     gradio huggingface_hub \
     timm qwen-vl-utils qwen-omni-utils keye-vl-utils \
     decord av opencv-python-headless librosa audioread soundfile einops \
@@ -196,10 +201,9 @@ RUN uv pip install --no-cache \
     python -m ipykernel install --sys-prefix --name "$PY_TAG" --display-name "Python ${PYTHON_VERSION} (CUDA + vLLM + ms-swift)"
 
 # ------------------------------------------------------------------------------
-# 7. 为 A800(8.0) / H20、H200(9.0) / B300(10.0;10.3) 预编译 DeepSpeed 的 4 个算子
+# 7. 为 A800(8.0) / H20、H200(9.0) 预编译 DeepSpeed 的 4 个算子
 # ------------------------------------------------------------------------------
-RUN VALID_ARCH=$(python -c "import os, torch.utils.cpp_extension as ext; os.environ['TORCH_CUDA_ARCH_LIST']='8.0;9.0;10.0;10.3'; \
-      ext._get_cuda_arch_flags(); print('8.0;9.0;10.0;10.3')" 2>/dev/null || echo "8.0;9.0;10.0+PTX") && \
+RUN VALID_ARCH=$(python -c "import os, torch.utils.cpp_extension as ext; ext._get_cuda_arch_flags(); print(os.environ['TORCH_CUDA_ARCH_LIST'])" 2>/dev/null || echo "${TORCH_CUDA_ARCH_LIST}") && \
     DS_PKG=$(pip freeze | grep '^deepspeed==') && \
     echo "Pre-compiling ${DS_PKG} ops for target architectures: ${VALID_ARCH}" && \
     TORCH_CUDA_ARCH_LIST="${VALID_ARCH}" \
@@ -245,7 +249,9 @@ RUN SITE_PKG=$(python -c "import site; print(site.getsitepackages()[0])") && \
       'torch torchvision torchaudio transformers datasets peft trl deepspeed' \
       'modelscope vllm swift timm decord librosa audioread soundfile einops' \
       'qwen_vl_utils qwen_omni_utils ray math_verify gymnasium wandb swanlab swanboard hf_transfer gpustat pycocotools' \
-      ' gptqmodel torchao hqq gguf tensorboard""".split()' \
+      ' gptqmodel torchao hqq gguf jupyter_server_proxy jupyterlab_iframe tornado_proxy_handlers ipylab' \
+      ' jupyterlab_nvdashboard ipydatagrid anywidget itables plotly bokeh' \
+      ' netcal torchmetrics system_one jev sentencepiece tensorboard""".split()' \
       'failed = []' \
       'for name in MODS:' \
       '    try:' \

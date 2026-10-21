@@ -141,7 +141,7 @@ jobs:
             zsh --version | head -n 1 && code-server --version | head -n 1
             zoxide --version && fzf --version && lazygit --version | head -n 1
             ls /usr/share/fonts/opentype/noto/ 2>/dev/null | grep -qi CJK && echo "CJK 字体: OK"
-            test "$(pip list 2>/dev/null | grep -cE '^(jupyterlab-git|jupyter-resource-usage|jupyterlab-lsp|python-lsp-server|jupyterlab-execute-time|ipympl|hf-transfer|gpustat|pycocotools)')" -ge 9 && echo "新增 pip 包: OK"
+            test "$(pip list 2>/dev/null | grep -cE '^(jupyterlab-git|jupyter-resource-usage|jupyterlab-lsp|python-lsp-server|jupyterlab-execute-time|ipympl|hf-transfer|gpustat|pycocotools|jupyter-server-proxy|jupyterlab-iframe|tornado-proxy-handlers|ipylab|jupyterlab-nvdashboard|ipydatagrid|anywidget|itables|plotly|bokeh|netcal|torchmetrics|system-one|jev|sentencepiece)')" -ge 24 && echo "新增 pip 包: OK"
             nvcc --version | grep -i release
             jupyter lab --version && jupyter notebook --version
             jupyter kernelspec list | grep -E 'python3[0-9]+'
@@ -164,6 +164,9 @@ jobs:
           import timm, decord, librosa, qwen_vl_utils, qwen_omni_utils
           import ray, math_verify, gymnasium, wandb, swanlab, swanboard, hf_transfer, gpustat, pycocotools
           import gptqmodel, torchao, hqq, gguf
+          import jupyter_server_proxy, jupyterlab_iframe, tornado_proxy_handlers, ipylab
+          import jupyterlab_nvdashboard, ipydatagrid, anywidget, itables, plotly, bokeh
+          import netcal, torchmetrics, system_one, jev, sentencepiece
 
           _exp = os.environ.get('EXPECTED_PY', '')
           _got = f'{sys.version_info[0]}.{sys.version_info[1]}'
