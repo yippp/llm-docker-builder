@@ -12,7 +12,7 @@ GitHub Actions 构建后推送到 GHCR，并导出单个 `.tar.gz` 上传到 Hug
 | 推理 | vLLM |
 | 训练 | ms-swift、DeepSpeed（构建时预编译 fused_adam / cpu_adam / aio / utils 四个算子）、Megatron-LM |
 | 量化 | gptqmodel 5.7.0（GPTQ）、torchao（FP8/INT4）、hqq、gguf、bitsandbytes（QLoRA）；推理侧量化内核由 vllm 覆盖。llmcompressor 因与 transformers 5.x 不兼容暂未加入 |
-| 决策模型 | netcal + torchmetrics（校准度量 ECE/Brier）、system-one + jev 客户端。基座 Qwen3.5/3.8 已由 ms-swift、transformers（`qwen3_5`）与 vllm 支持，决策头（pointer head）与温度校准需自备训练代码 |
+| 决策模型 | netcal + torchmetrics（校准度量 ECE/Brier）、system-one 客户端。基座 Qwen3.5/3.8 已由 ms-swift、transformers（`qwen3_5`）与 vllm 支持，决策头（pointer head）与温度校准需自备训练代码 |
 | 注意力 | flash-attn，取自 mjun0812 的预编译轮子仓库（排除 ROCm 构建，优先匹配与 torch 一致的 CUDA 小版本） |
 | 前端工具 | JupyterLab（`start-jupyter`）：git 面板、内存表、LSP 代码智能、单元格耗时、ipympl、nvdashboard（GPU 面板）、ipydatagrid、anywidget、itables、plotly、bokeh；jupyter-server-proxy + jupyterlab-iframe + tornado-proxy-handlers + ipylab（在 Jupyter 里嵌入外部 Web UI）；VS Code 浏览器版（`start-code-server`，端口 8080）；Node.js、Bun、npm |
 | 命令行 | tmux、vim、htop、nvtop、fzf、jq、yq、bat、ffmpeg、git-lfs、gh、rsync；rg/fzf/zoxide/lazygit 取上游最新静态二进制 |

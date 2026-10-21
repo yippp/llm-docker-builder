@@ -173,6 +173,8 @@ RUN PY_TAG=$(python -c "import sys; print(f'cp{sys.version_info.major}{sys.versi
 # 但代码 import 的 TORCH_INIT_FUNCTIONS 在 transformers 5.0 已移除，声明的整个
 # 区间实际都导入失败（已验证 5.15/5.16/5.17 源码）；vllm 0.32.0 又要求
 # transformers>=5.10.4，无回退空间。等上游修好后恢复。
+# System One 客户端只装 system-one：jev 要求 Python>=3.14（所有版本），
+# 而本镜像固定 3.12，uv 解析阶段就会直接报无解。
 # ------------------------------------------------------------------------------
 RUN uv pip install --no-cache \
     -c /tmp/torch_constraints.txt \
@@ -188,7 +190,7 @@ RUN uv pip install --no-cache \
     "deepspeed>=0.19.5" \
     accelerate optimum bitsandbytes mcore-bridge liger-kernel \
     "gptqmodel==5.7.0" torchao hqq gguf \
-    netcal torchmetrics system-one jev \
+    netcal torchmetrics system-one \
     gradio huggingface_hub \
     timm qwen-vl-utils qwen-omni-utils keye-vl-utils \
     decord av opencv-python-headless librosa audioread soundfile einops \
@@ -251,7 +253,7 @@ RUN SITE_PKG=$(python -c "import site; print(site.getsitepackages()[0])") && \
       'qwen_vl_utils qwen_omni_utils ray math_verify gymnasium wandb swanlab swanboard hf_transfer gpustat pycocotools' \
       ' gptqmodel torchao hqq gguf jupyter_server_proxy jupyterlab_iframe tornado_proxy_handlers ipylab' \
       ' jupyterlab_nvdashboard ipydatagrid anywidget itables plotly bokeh' \
-      ' netcal torchmetrics system_one jev sentencepiece tensorboard""".split()' \
+      ' netcal torchmetrics system_one sentencepiece tensorboard""".split()' \
       'failed = []' \
       'for name in MODS:' \
       '    try:' \
