@@ -140,8 +140,9 @@ jobs:
             jq --version && yq --version && gh --version | head -n 1
             zsh --version | head -n 1 && code-server --version | head -n 1
             zoxide --version && fzf --version && lazygit --version | head -n 1
+            ruff --version && ty --version
             ls /usr/share/fonts/opentype/noto/ 2>/dev/null | grep -qi CJK && echo "CJK 字体: OK"
-            test "$(pip list 2>/dev/null | grep -cE '^(jupyterlab-git|jupyter-resource-usage|jupyterlab-lsp|python-lsp-server|jupyterlab-execute-time|ipympl|hf-transfer|gpustat|pycocotools|jupyter-server-proxy|jupyterlab-iframe|tornado-proxy-handlers|ipylab|jupyterlab-nvdashboard|ipydatagrid|anywidget|itables|plotly|bokeh|netcal|torchmetrics|system-one|sentencepiece)')" -ge 23 && echo "新增 pip 包: OK"
+            test "$(pip list 2>/dev/null | grep -cE '^(jupyterlab-git|jupyter-resource-usage|jupyterlab-lsp|python-lsp-server|jupyterlab-execute-time|ipympl|hf-transfer|gpustat|pycocotools|jupyter-server-proxy|jupyterlab-iframe|tornado-proxy-handlers|ipylab|jupyterlab-nvdashboard|ipydatagrid|anywidget|itables|plotly|bokeh|netcal|torchmetrics|system-one|sentencepiece|ruff|ty)')" -ge 25 && echo "新增 pip 包: OK"
             nvcc --version | grep -i release
             jupyter lab --version && jupyter notebook --version
             jupyter kernelspec list | grep -E 'python3[0-9]+'
@@ -150,6 +151,27 @@ jobs:
             which pi && pi --version
             which ck && ck --version
             which qmd && qmd --help > /dev/null
+          "
+
+          echo "=== [1.5/3] 验证 pi 预置（内网离线：扩展必须已装且无联网来源）与技能 ==="
+          docker run --rm local-test:verify bash -c "
+            set -e
+            jq -e '.packages | length == 9' /root/.pi/agent/settings.json > /dev/null
+            jq -e '[.packages[] | select(startswith(\"/root/.pi/agent/npm/node_modules/\"))] | length == 9' /root/.pi/agent/settings.json > /dev/null
+            echo '9 个扩展均为本地路径引用（无 npm: / http）: OK'
+            for s in renhua writing-for-agents grilling grill-me impeccable ui-styling ui-ux-pro-max; do
+              test -f \"/root/.pi/agent/skills/\$s/SKILL.md\"
+            done
+            echo '7 个技能: OK'
+            test -x /opt/impeccable/impeccable && echo 'impeccable 引擎: OK'
+          "
+
+          echo "=== [1.6/3] 验证 sglang 独立环境与 check-envs ==="
+          docker run --rm local-test:verify bash -c "
+            set -e
+            /opt/envs/sglang/bin/python -c \"import sglang, torch, transformers; print('sglang', sglang.__version__, '| torch', torch.__version__, '| transformers', transformers.__version__)\"
+            python -c \"import torch; print('基座 torch 仍是', torch.__version__)\"
+            check-envs
           "
 
           echo "=== [2/3] 验证 Python、OpenAI NamespaceTool、vLLM 与全部依赖库 ==="

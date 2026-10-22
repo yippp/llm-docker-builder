@@ -17,8 +17,11 @@ GitHub Actions 构建后推送到 GHCR，并导出单个 `.tar.gz` 上传到 Hug
 | 前端工具 | JupyterLab（`start-jupyter`）：git 面板、内存表、LSP 代码智能、单元格耗时、ipympl、nvdashboard（GPU 面板）、ipydatagrid、anywidget、itables、plotly、bokeh；jupyter-server-proxy + jupyterlab-iframe + tornado-proxy-handlers + ipylab（在 Jupyter 里嵌入外部 Web UI）；VS Code 浏览器版（`start-code-server`，端口 8080）；Node.js、Bun、npm |
 | 命令行 | tmux、vim、htop、nvtop、fzf、jq、yq、bat、ffmpeg、git-lfs、gh、rsync；rg/fzf/zoxide/lazygit 取上游最新静态二进制 |
 | Shell | zsh（root 默认，bash 保留跑脚本）：fzf-tab Tab 模糊补全、zsh-autosuggestions 灰色历史提示、zsh-syntax-highlighting 语法高亮、`z <目录关键词>` 按历史跳转、fzf 快捷键 |
+| 环境管理 | 基座由 conda 提供解释器、uv 装全部依赖；`activate` 列出/切换 `/opt/envs` 下的 venv；`check-envs` 逐个验证基座与各 venv 的导入 |
+| Coding Agent | herdr、pi、qmd、ck。pi 预置 9 个扩展与 7 个技能（内网离线：扩展在构建期装好并以本地路径引用，运行时不会发起任何网络请求）；Python 语言服务器为 ruff 与 ty（pi-lsp 内置目录里仅有的两个） |
 | 中文字体 | Noto Sans CJK + Noto Color Emoji，matplotlib 默认字体已配好，图表中文不再是方框 |
 | Coding Agent | herdr、pi、qmd、ck |
+| sglang 环境 | `/opt/envs/sglang`（sglang 0.5.21）。与 vllm 在 transformers / xgrammar / flashinfer-python 三个包上互斥，故独立成 venv；torch 与 torchaudio 复用基座，增量约 1.5 GB |
 | 其他 | `/opt/StartLux-Decision`、`/root/.cache/modelscope/_github/Megatron-LM` |
 
 暴露端口 `8888`（Jupyter）、`8000`（vLLM）、`8080`（code-server）。默认工作目录 `/workspace`。
@@ -126,6 +129,17 @@ verify-imports.py
 ```
 
 Shell 小抄：`z <关键词>` 按历史跳目录，Tab 补全支持模糊筛选，Ctrl-R 搜历史命令，Ctrl-T 搜文件。
+
+环境切换与自检：
+
+```bash
+activate            # 列出 /opt/envs 下的环境
+activate sglang     # 切进去（用法同 conda activate）
+deactivate          # 退回基座
+check-envs          # 验证基座与各 venv 的导入，改过一个环境后跑一次
+```
+
+`check-envs` 是改动某个环境后的安全网：它会把基座和每个 venv 都验一遍，确认没有互相波及。
 
 从 HuggingFace 下载后导入：
 

@@ -40,6 +40,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LD_LIBRARY_PATH=/usr/local/cuda/compat:/usr/local/cuda/lib64:$LD_LIBRARY_PATH \
     PIP_NO_CACHE_DIR=1 \
     UV_SYSTEM_PYTHON=1 \
+    IMPECCABLE_BIN=/opt/impeccable/impeccable \
     UV_HTTP_TIMEOUT=300 \
     HF_XET_HIGH_PERFORMANCE=1 \
     HF_HUB_ENABLE_HF_TRANSFER=1
@@ -91,10 +92,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends --allow-change-
 
 # ------------------------------------------------------------------------------
 # 2. 安装 Conda（Python 版本见 PYTHON_VERSION）+ Node.js + Bun，并升级 pip / uv / npm
+#    conda 在这里只提供解释器，ML 依赖全部由 uv 安装（第 4、6 步），没有一条 conda install。
+#    装完立即 conda clean -afy：清掉安装器留下的包缓存（归档与解压副本），
+#    同一 RUN 内删除不占镜像层。
 # ------------------------------------------------------------------------------
 RUN wget -q https://github.com/conda-forge/miniforge/releases/download/${MINIFORGE_VERSION}/Miniforge3-${MINIFORGE_VERSION}-Linux-x86_64.sh -O /tmp/miniforge.sh && \
     bash /tmp/miniforge.sh -b -p ${CONDA_DIR} && \
     rm -f /tmp/miniforge.sh && \
+    ${CONDA_DIR}/bin/conda clean -afy && \
     ${CONDA_DIR}/bin/conda init bash && \
     echo "conda activate base" >> /root/.bashrc && \
     ${CONDA_DIR}/bin/python -c "import sys; v=f'{sys.version_info[0]}.{sys.version_info[1]}'; assert v=='${PYTHON_VERSION}', f'miniforge ${MINIFORGE_VERSION} 安装的是 Python {v}，与要求的 ${PYTHON_VERSION} 不一致；请同步修改 MINIFORGE_VERSION 与 PYTHON_VERSION'; print('Python', v, 'OK')" && \
@@ -197,6 +202,7 @@ RUN uv pip install --no-cache \
     "ray[default]" math_verify gymnasium wandb tensorboard \
     "swanlab[dashboard]==0.7.19" "swanboard==0.1.9b3" \
     evalscope icecream py-spy pre-commit hf_transfer gpustat pycocotools \
+    ruff ty \
     "ms-swift>=4.6" \
     "numpy>=2.1.0" "pyarrow>=18.0.0" && \
     PY_TAG=$(python -c "import sys; print(f'python{sys.version_info[0]}{sys.version_info[1]}')") && \
@@ -295,6 +301,128 @@ RUN SITE_PKG=$(python -c "import site; print(site.getsitepackages()[0])") && \
     python /usr/local/bin/verify-imports.py && \
     echo "CU=$(nvcc --version | sed -n 's/.*release \([0-9]*\.[0-9]*\).*/\1/p' | head -n 1)" | cat - /opt/versions.env > /tmp/v.env && \
     mv /tmp/v.env /opt/versions.env && cat /opt/versions.env
+
+# ------------------------------------------------------------------------------
+# 9. 预置 pi 扩展与技能。内网运行时没有外网：pi 对 npm: 来源会执行 npm install，
+#    在内网必然失败，所以构建期就把扩展装好，settings.json 改用绝对路径引用，
+#    pi 启动不再发起任何网络请求。凭据文件（auth.json / models.json 等）不写入，
+#    由使用者在容器内自行配置。
+#    ruff 与 ty 对应 pi-lsp 内置目录里仅有的两个 Python 语言服务器（ruff server /
+#    ty server）；python-lsp-server 是第 6 步为 JupyterLab 装的，两者互不干扰。
+#    impeccable 技能的引擎平时从 GitHub Releases 下载，这里预先取回并用
+#    IMPECCABLE_BIN 指向它，附带 sha256 校验。
+# ------------------------------------------------------------------------------
+COPY pi/skills/ /root/.pi/agent/skills/
+RUN mkdir -p /root/.pi/agent/npm && \
+    printf '%s\n' \
+      '{' \
+      '  "name": "pi-extensions",' \
+      '  "private": true,' \
+      '  "dependencies": {' \
+      '    "@dietrichgebert/ponytail": "^5.3.2",' \
+      '    "@juicesharp/rpiv-ask-user-question": "^2.13.9",' \
+      '    "@narumitw/pi-lsp": "^0.49.8",' \
+      '    "opensec-pi-fff": "^0.11.0",' \
+      '    "opensec-pi-todo": "^2.13.1",' \
+      '    "pi-background-tasks": "^2.6.10",' \
+      '    "pi-goal-x": "^0.32.3",' \
+      '    "pi-hermes-memory": "^0.9.11",' \
+      '    "pi-powerline-footer": "^0.20.2"' \
+      '  }' \
+      '}' > /root/.pi/agent/npm/package.json && \
+    cd /root/.pi/agent/npm && \
+    npm install --omit=dev --legacy-peer-deps --no-audit --no-fund && \
+    npm cache clean --force && \
+    for p in @dietrichgebert/ponytail @juicesharp/rpiv-ask-user-question @narumitw/pi-lsp opensec-pi-fff opensec-pi-todo pi-background-tasks pi-goal-x pi-hermes-memory pi-powerline-footer; do \
+      test -d "/root/.pi/agent/npm/node_modules/$p" || { echo "pi 扩展未装成功: $p"; exit 1; }; \
+    done && \
+    printf '%s\n' \
+      '{' \
+      '  "theme": "dark",' \
+      '  "packages": [' \
+      '    "/root/.pi/agent/npm/node_modules/@dietrichgebert/ponytail",' \
+      '    "/root/.pi/agent/npm/node_modules/@juicesharp/rpiv-ask-user-question",' \
+      '    "/root/.pi/agent/npm/node_modules/@narumitw/pi-lsp",' \
+      '    "/root/.pi/agent/npm/node_modules/opensec-pi-fff",' \
+      '    "/root/.pi/agent/npm/node_modules/opensec-pi-todo",' \
+      '    "/root/.pi/agent/npm/node_modules/pi-background-tasks",' \
+      '    "/root/.pi/agent/npm/node_modules/pi-goal-x",' \
+      '    "/root/.pi/agent/npm/node_modules/pi-hermes-memory",' \
+      '    "/root/.pi/agent/npm/node_modules/pi-powerline-footer"' \
+      '  ]' \
+      '}' > /root/.pi/agent/settings.json && \
+    IMP_VER=$(cat /root/.pi/agent/skills/impeccable/scripts/VERSION) && \
+    mkdir -p /opt/impeccable && \
+    curl -fsSL "https://github.com/pbakaus/impeccable/releases/download/engine-v${IMP_VER}/impeccable-linux-x64" -o /opt/impeccable/impeccable-linux-x64 && \
+    curl -fsSL "https://github.com/pbakaus/impeccable/releases/download/engine-v${IMP_VER}/impeccable-linux-x64.sha256" -o /tmp/impeccable.sha256 && \
+    ( cd /opt/impeccable && sha256sum -c /tmp/impeccable.sha256 ) && \
+    rm -f /tmp/impeccable.sha256 && \
+    chmod +x /opt/impeccable/impeccable-linux-x64 && \
+    ln -sf /opt/impeccable/impeccable-linux-x64 /opt/impeccable/impeccable && \
+    test -x /opt/impeccable/impeccable && echo "impeccable 引擎已就位 (${IMP_VER})"
+
+# ------------------------------------------------------------------------------
+# 10. sglang 独立环境。sglang 与 vllm 在 transformers / xgrammar / flashinfer-python
+#     三个同名包上各自钉死不同版本，同一环境里同名包只能存在一份，因此无法共存。
+#     两者最贵的 torch 2.13.0 与 torchaudio 2.11.0 钉版本恰好一致，于是用
+#     venv --system-site-packages 复用基座这两项，只把冲突包装进 venv。
+#     必须用 pip 而不是 uv：pip 尊重 --system-site-packages（只装缺的），并且拒绝
+#     卸载 venv 之外的包——基座因此不会被改坏；uv 这两点都不支持。
+# ------------------------------------------------------------------------------
+RUN /opt/conda/bin/python -m venv --system-site-packages /opt/envs/sglang && \
+    /opt/envs/sglang/bin/pip install --no-cache-dir "sglang==0.5.21" && \
+    printf 'sglang\n' > /opt/envs/sglang/.check-imports && \
+    /opt/envs/sglang/bin/python -c "import sglang, torch, transformers, importlib.metadata as md; print('sglang', sglang.__version__, '| torch', torch.__version__, '| transformers', transformers.__version__, '| flashinfer', md.version('flashinfer-python'))"
+
+# ------------------------------------------------------------------------------
+# 11. 环境切换与自检。activate <名字> 列出或切换 /opt/envs 下的环境（用法同
+#     conda activate）；check-envs 依次验证基座与各 venv，改动其中一个环境后
+#     跑一次就能确认另一个没被波及。
+# ------------------------------------------------------------------------------
+RUN printf '%s\n' \
+      '# 切换 /opt/envs 下的 venv：activate 列表，activate <名字> 进入' \
+      'activate() {' \
+      '  local base=/opt/envs' \
+      '  if [ -z "$1" ]; then ls -1 "$base" 2>/dev/null || echo "还没有创建任何环境"; return 0; fi' \
+      '  if [ ! -f "$base/$1/bin/activate" ]; then echo "没有名为 $1 的环境"; ls -1 "$base" 2>/dev/null; return 1; fi' \
+      '  source "$base/$1/bin/activate"' \
+      '}' > /etc/profile.d/zz-activate.sh && \
+    printf '%s\n' \
+      '#!/bin/bash' \
+      '# 逐个验证基座与 /opt/envs 下各环境的导入是否正常' \
+      'fail=0' \
+      'echo "== 基座 /opt/conda =="' \
+      'if python /usr/local/bin/verify-imports.py > /tmp/check-envs-base.log 2>&1; then' \
+      '  echo "  导入检查通过"' \
+      'else' \
+      '  echo "  导入检查失败："' \
+      '  tail -n 5 /tmp/check-envs-base.log | sed "s/^/    /"' \
+      '  fail=1' \
+      'fi' \
+      'for d in /opt/envs/*/; do' \
+      '  [ -d "$d" ] || continue' \
+      '  name=$(basename "$d")' \
+      '  echo "== $name =="' \
+      '  if [ -f "$d/.check-imports" ]; then' \
+      '    while read -r mod; do' \
+      '      [ -z "$mod" ] && continue' \
+      '      if "$d/bin/python" -c "import $mod" 2>/dev/null; then' \
+      '        echo "  import $mod: 正常"' \
+      '      else' \
+      '        echo "  import $mod: 失败"' \
+      '        fail=1' \
+      '      fi' \
+      '    done < "$d/.check-imports"' \
+      '  else' \
+      '    echo "  未声明检查项（$d.check-imports）"' \
+      '  fi' \
+      'done' \
+      'exit $fail' > /usr/local/bin/check-envs && \
+    chmod +x /usr/local/bin/check-envs && \
+    printf '\nsource /etc/profile.d/zz-activate.sh\n' >> /root/.bashrc && \
+    printf '\nsource /etc/profile.d/zz-activate.sh\n' >> /root/.zshrc && \
+    printf '\nsource /etc/profile.d/zz-activate.sh\n' >> /etc/skel/.zshrc && \
+    check-envs
 
 ENV MAX_JOBS=8 \
     NVCC_THREADS=4
