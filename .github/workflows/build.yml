@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: '镜像 tag。留空则按镜像内实际版本自动派生，形如 cu133-py312-vllm0.31.0-swift4.6.0-rl；填写后使用指定值'
+        description: '镜像 tag。留空则按镜像内实际版本自动派生，形如 cu133-py312-vllm0.32.0-swift4.6.0-rl（版本部分随上游浮动）；填写后使用指定值'
         required: false
         default: ''
       hf_repo_id:

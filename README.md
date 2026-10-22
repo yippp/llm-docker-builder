@@ -48,7 +48,7 @@ docker build --build-arg NODE_VERSION=v24.21.0 -t llm-env:test .
 以下几处是有意为之，不要随手改动：
 
 - `deepspeed>=0.19.5`。0.19.5 才包含 PR#8238，把 host cxx 编译选项改为 `-std=c++20`。
-  vLLM 0.31.0 固定 `torch==2.13.0`，DeepSpeed 0.18.x 在这个 torch 版本上编译算子会失败。
+  vLLM 固定 `torch==2.13.0`，DeepSpeed 0.18.x 在这个 torch 版本上编译算子会失败。
 - `datasets`、`peft`、`trl`、`transformers`、`modelscope` 不写版本上限。ms-swift 的包元数据
   已经声明了精确区间，重复写一份只会与上游冲突；把 vllm 一起列入安装命令，让 uv 同时
   满足 vllm 对 transformers 的上限。
@@ -65,19 +65,19 @@ Dockerfile 第 2 步会校验实际装出的 Python 版本，不一致时立即�
 `/opt/versions.env`：
 
 ```
-CU=13.3
-PY=3.12
-VLLM=0.31.0
+CU=13.3          # 取自 nvcc，不浮动
+PY=3.12          # 由 MINIFORGE_VERSION 固定
+VLLM=0.32.0      # 以下五项随上游浮动，这里是某次构建的值，以镜像内为准
 SWIFT=4.6.0
 TORCH=2.13.0
-DEEPSPEED=0.19.7
+DEEPSPEED=0.19.8
 FLASH_ATTN=2.8.3
 ```
 
 workflow 读取该文件生成 tag，形如：
 
 ```
-cu133-py312-vllm0.31.0-swift4.6.0-rl
+cu133-py312-vllm0.32.0-swift4.6.0-rl
 ```
 
 `workflow_dispatch` 的 `image_tag` 留空即自动派生，填写后使用指定值。
