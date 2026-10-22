@@ -41,6 +41,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
     UV_SYSTEM_PYTHON=1 \
     IMPECCABLE_BIN=/opt/impeccable/impeccable \
+    # 关闭 pi 自身的后台联网：pi.dev 的版本检查在内网不可达，模型目录刷新同理。
+    # 需要时可在运行时覆盖，例如 docker run -e PI_OFFLINE=0。
+    PI_OFFLINE=1 \
+    PI_SKIP_VERSION_CHECK=1 \
     UV_HTTP_TIMEOUT=300 \
     HF_XET_HIGH_PERFORMANCE=1 \
     HF_HUB_ENABLE_HF_TRANSFER=1
@@ -283,6 +287,8 @@ RUN SITE_PKG=$(python -c "import site; print(site.getsitepackages()[0])") && \
       '        return md.version(pkg)' \
       '    except Exception:' \
       '        return "none"' \
+      'if "--no-versions" in sys.argv:' \
+      '    sys.exit(0)' \
       'print("已写出 /opt/versions.env:")' \
       'with open("/opt/versions.env", "w") as fh:' \
       '    for key, val in [' \
@@ -303,14 +309,21 @@ RUN SITE_PKG=$(python -c "import site; print(site.getsitepackages()[0])") && \
     mv /tmp/v.env /opt/versions.env && cat /opt/versions.env
 
 # ------------------------------------------------------------------------------
-# 9. 预置 pi 扩展与技能。内网运行时没有外网：pi 对 npm: 来源会执行 npm install，
-#    在内网必然失败，所以构建期就把扩展装好，settings.json 改用绝对路径引用，
-#    pi 启动不再发起任何网络请求。凭据文件（auth.json / models.json 等）不写入，
-#    由使用者在容器内自行配置。
+# 9. 预置 pi 扩展与技能。扩展在构建期装好、settings.json 用绝对路径引用，
+#    好处是确定性：容器内的 npm 默认指向 registry.npmjs.org，不依赖运行环境是否
+#    配好了内部镜像源，启动时也不会去检定更新。内网若有 npm 镜像源，可自行用
+#    `pi install npm:<包>` 再装；设置 `PI_OFFLINE=0 PI_SKIP_VERSION_CHECK=0`
+#    可恢复 pi 自身的后台联网。
+#    扩展必须选 Node 构建：镜像里的 pi 由 npm 全局安装、跑在 Node 上，Bun 专用
+#    构建（opensec-pi-fff / opensec-pi-todo 就是）加载时会抛错并让 pi 直接退出。
+#    对应包分别换成 @ff-labs/pi-fff 与 @juicesharp/rpiv-todo，下面另做构建期拦截。
+#    凭据文件（auth.json / models.json 等）不写入，由使用者在容器内自行配置。
 #    ruff 与 ty 对应 pi-lsp 内置目录里仅有的两个 Python 语言服务器（ruff server /
 #    ty server）；python-lsp-server 是第 6 步为 JupyterLab 装的，两者互不干扰。
 #    impeccable 技能的引擎平时从 GitHub Releases 下载，这里预先取回并用
 #    IMPECCABLE_BIN 指向它，附带 sha256 校验。
+#    ui-ux-pro-max 与 ui-styling 由 ui-ux-pro-max-cli 在构建期装入 ~/.agents/skills，
+#    --offline 用包内自带模板与数据，不联网。
 # ------------------------------------------------------------------------------
 COPY pi/skills/ /root/.pi/agent/skills/
 RUN mkdir -p /root/.pi/agent/npm && \
@@ -320,10 +333,10 @@ RUN mkdir -p /root/.pi/agent/npm && \
       '  "private": true,' \
       '  "dependencies": {' \
       '    "@dietrichgebert/ponytail": "^5.3.2",' \
+      '    "@ff-labs/pi-fff": "^0.11.0",' \
       '    "@juicesharp/rpiv-ask-user-question": "^2.13.9",' \
+      '    "@juicesharp/rpiv-todo": "^2.13.9",' \
       '    "@narumitw/pi-lsp": "^0.49.8",' \
-      '    "opensec-pi-fff": "^0.11.0",' \
-      '    "opensec-pi-todo": "^2.13.1",' \
       '    "pi-background-tasks": "^2.6.10",' \
       '    "pi-goal-x": "^0.32.3",' \
       '    "pi-hermes-memory": "^0.9.11",' \
@@ -333,18 +346,19 @@ RUN mkdir -p /root/.pi/agent/npm && \
     cd /root/.pi/agent/npm && \
     npm install --omit=dev --legacy-peer-deps --no-audit --no-fund && \
     npm cache clean --force && \
-    for p in @dietrichgebert/ponytail @juicesharp/rpiv-ask-user-question @narumitw/pi-lsp opensec-pi-fff opensec-pi-todo pi-background-tasks pi-goal-x pi-hermes-memory pi-powerline-footer; do \
+    for p in @dietrichgebert/ponytail @ff-labs/pi-fff @juicesharp/rpiv-ask-user-question @juicesharp/rpiv-todo @narumitw/pi-lsp pi-background-tasks pi-goal-x pi-hermes-memory pi-powerline-footer; do \
       test -d "/root/.pi/agent/npm/node_modules/$p" || { echo "pi 扩展未装成功: $p"; exit 1; }; \
+      grep -rqs "is a Bun build" "/root/.pi/agent/npm/node_modules/$p" && { echo "$p 是 Bun 专用构建，在 Node 下会加载失败"; exit 1; }; \
     done && \
     printf '%s\n' \
       '{' \
       '  "theme": "dark",' \
       '  "packages": [' \
       '    "/root/.pi/agent/npm/node_modules/@dietrichgebert/ponytail",' \
+      '    "/root/.pi/agent/npm/node_modules/@ff-labs/pi-fff",' \
       '    "/root/.pi/agent/npm/node_modules/@juicesharp/rpiv-ask-user-question",' \
+      '    "/root/.pi/agent/npm/node_modules/@juicesharp/rpiv-todo",' \
       '    "/root/.pi/agent/npm/node_modules/@narumitw/pi-lsp",' \
-      '    "/root/.pi/agent/npm/node_modules/opensec-pi-fff",' \
-      '    "/root/.pi/agent/npm/node_modules/opensec-pi-todo",' \
       '    "/root/.pi/agent/npm/node_modules/pi-background-tasks",' \
       '    "/root/.pi/agent/npm/node_modules/pi-goal-x",' \
       '    "/root/.pi/agent/npm/node_modules/pi-hermes-memory",' \
@@ -359,15 +373,26 @@ RUN mkdir -p /root/.pi/agent/npm && \
     rm -f /tmp/impeccable.sha256 && \
     chmod +x /opt/impeccable/impeccable-linux-x64 && \
     ln -sf /opt/impeccable/impeccable-linux-x64 /opt/impeccable/impeccable && \
-    test -x /opt/impeccable/impeccable && echo "impeccable 引擎已就位 (${IMP_VER})"
+    test -x /opt/impeccable/impeccable && echo "impeccable 引擎已就位 (${IMP_VER})" && \
+    npm install -g ui-ux-pro-max-cli && \
+    uipro init --ai universal --global --offline && \
+    for s in /root/.agents/skills/*/; do \
+      n=$(basename "$s"); \
+      case "$n" in ui-ux-pro-max|ui-styling) ;; *) rm -rf "$s" ;; esac; \
+    done && \
+    test -f /root/.agents/skills/ui-ux-pro-max/SKILL.md && \
+    test -f /root/.agents/skills/ui-styling/SKILL.md && \
+    npm cache clean --force && \
+    echo "pi 技能: 仓库内 5 个 + ui-ux-pro-max / ui-styling（npm 装入）"
 
 # ------------------------------------------------------------------------------
-# 10. sglang 独立环境。sglang 与 vllm 在 transformers / xgrammar / flashinfer-python
-#     三个同名包上各自钉死不同版本，同一环境里同名包只能存在一份，因此无法共存。
-#     两者最贵的 torch 2.13.0 与 torchaudio 2.11.0 钉版本恰好一致，于是用
-#     venv --system-site-packages 复用基座这两项，只把冲突包装进 venv。
-#     必须用 pip 而不是 uv：pip 尊重 --system-site-packages（只装缺的），并且拒绝
-#     卸载 venv 之外的包——基座因此不会被改坏；uv 这两点都不支持。
+# 10. 独立环境（一）：sglang。它无法与基座共存：两边各自钉死同名包的不同版本
+#     （实测版本不同的包共 24 个，含 transformers / xgrammar / flashinfer-python /
+#     tokenizers / huggingface-hub / compressed-tensors / cuda-tile 等），而一个环境里
+#     同名包只能存在一份。两者最贵的 torch 2.13.0 与 torchaudio 2.11.0 钉版本恰好
+#     一致，于是用 venv --system-site-packages 复用基座这两项，只把版本不同的包装
+#     进 venv。必须用 pip 而不是 uv：pip 尊重 --system-site-packages（只装缺的），
+#     并且拒绝卸载 venv 之外的包——基座因此不会被改坏；uv 这两点都不支持。
 # ------------------------------------------------------------------------------
 RUN /opt/conda/bin/python -m venv --system-site-packages /opt/envs/sglang && \
     /opt/envs/sglang/bin/pip install --no-cache-dir "sglang==0.5.21" && \
@@ -375,9 +400,23 @@ RUN /opt/conda/bin/python -m venv --system-site-packages /opt/envs/sglang && \
     /opt/envs/sglang/bin/python -c "import sglang, torch, transformers, importlib.metadata as md; print('sglang', sglang.__version__, '| torch', torch.__version__, '| transformers', transformers.__version__, '| flashinfer', md.version('flashinfer-python'))"
 
 # ------------------------------------------------------------------------------
-# 11. 环境切换与自检。activate <名字> 列出或切换 /opt/envs 下的环境（用法同
+# 11. 独立环境（二）：label-studio。它要求 openai<2.0（基座是 3.x，而 vllm 要求
+#     openai>=2.25）与 pyarrow<25（基座 26），装进基座会把 vllm 弄坏，所以单独建
+#     venv。同样用 --system-site-packages 复用兼容的部分，冲突的包只落在 venv 里。
+#     它默认监听 8080，与 code-server 撞车，启动时用 --port 8090。
+# ------------------------------------------------------------------------------
+RUN /opt/conda/bin/python -m venv --system-site-packages /opt/envs/label-studio && \
+    /opt/envs/label-studio/bin/pip install --no-cache-dir -U label-studio && \
+    printf 'label_studio\n' > /opt/envs/label-studio/.check-imports && \
+    /opt/envs/label-studio/bin/python -c "import label_studio, importlib.metadata as md; print('label-studio', md.version('label-studio'), '| openai', md.version('openai'), '| pyarrow', md.version('pyarrow'))"
+
+# ------------------------------------------------------------------------------
+# 12. 环境切换与自检。activate <名字> 列出或切换 /opt/envs 下的环境（用法同
 #     conda activate）；check-envs 依次验证基座与各 venv，改动其中一个环境后
-#     跑一次就能确认另一个没被波及。
+#     跑一次就能确认另一个没被波及。注意 check-envs 调用 verify-imports.py 时
+#     必须带 --no-versions：那个脚本默认会重写 /opt/versions.env，而在第 8 步
+#     之后该文件已经被拼上了 CU= 一行，重写会把它抹掉，使 workflow 的 tag 派生
+#     步骤报“缺字段 CU”而失败。
 # ------------------------------------------------------------------------------
 RUN printf '%s\n' \
       '# 切换 /opt/envs 下的 venv：activate 列表，activate <名字> 进入' \
@@ -392,7 +431,7 @@ RUN printf '%s\n' \
       '# 逐个验证基座与 /opt/envs 下各环境的导入是否正常' \
       'fail=0' \
       'echo "== 基座 /opt/conda =="' \
-      'if python /usr/local/bin/verify-imports.py > /tmp/check-envs-base.log 2>&1; then' \
+      'if python /usr/local/bin/verify-imports.py --no-versions > /tmp/check-envs-base.log 2>&1; then' \
       '  echo "  导入检查通过"' \
       'else' \
       '  echo "  导入检查失败："' \
@@ -427,6 +466,6 @@ RUN printf '%s\n' \
 ENV MAX_JOBS=8 \
     NVCC_THREADS=4
 
-EXPOSE 8888 8000 8080
+EXPOSE 8888 8000 8080 8090
 WORKDIR /workspace
 CMD ["/bin/bash"]

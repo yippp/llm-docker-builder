@@ -153,24 +153,36 @@ jobs:
             which qmd && qmd --help > /dev/null
           "
 
-          echo "=== [1.5/3] 验证 pi 预置（内网离线：扩展必须已装且无联网来源）与技能 ==="
+          echo "=== [1.5/3] 验证 pi 预置（扩展、技能、加载）==="
           docker run --rm local-test:verify bash -c "
             set -e
             jq -e '.packages | length == 9' /root/.pi/agent/settings.json > /dev/null
             jq -e '[.packages[] | select(startswith(\"/root/.pi/agent/npm/node_modules/\"))] | length == 9' /root/.pi/agent/settings.json > /dev/null
-            echo '9 个扩展均为本地路径引用（无 npm: / http）: OK'
-            for s in renhua writing-for-agents grilling grill-me impeccable ui-styling ui-ux-pro-max; do
+            echo '9 个扩展均为本地路径引用（不会触发 npm install）: OK'
+            for s in renhua writing-for-agents grilling grill-me impeccable; do
               test -f \"/root/.pi/agent/skills/\$s/SKILL.md\"
             done
-            echo '7 个技能: OK'
+            echo '仓库内 5 个技能: OK'
+            for s in ui-ux-pro-max ui-styling; do
+              test -f \"/root/.agents/skills/\$s/SKILL.md\"
+            done
+            echo 'npm 装入的 2 个技能: OK'
             test -x /opt/impeccable/impeccable && echo 'impeccable 引擎: OK'
+            out=\$(pi -p x 2>&1 || true)
+            if echo \"\$out\" | grep -q 'Failed to load extension'; then
+              echo 'pi 扩展加载失败：'; echo \"\$out\" | head -n 5; exit 1
+            fi
+            echo 'pi 扩展加载: 无报错'
           "
 
-          echo "=== [1.6/3] 验证 sglang 独立环境与 check-envs ==="
+          echo "=== [1.6/3] 验证独立环境（sglang / label-studio）与 check-envs ==="
           docker run --rm local-test:verify bash -c "
             set -e
             /opt/envs/sglang/bin/python -c \"import sglang, torch, transformers; print('sglang', sglang.__version__, '| torch', torch.__version__, '| transformers', transformers.__version__)\"
-            python -c \"import torch; print('基座 torch 仍是', torch.__version__)\"
+            /opt/envs/label-studio/bin/python -c \"import label_studio, torch, importlib.metadata as md; print('label-studio', md.version('label-studio'), '| openai', md.version('openai'), '| pyarrow', md.version('pyarrow'))\"
+            python -c \"import torch, transformers, vllm; print('基座未被动过: torch', torch.__version__, '| transformers', transformers.__version__, '| vllm', vllm.__version__)\"
+            python -c \"import importlib.metadata as md; print('基座 openai', md.version('openai'), '| pyarrow', md.version('pyarrow'))\"
+            grep -q '^CU=' /opt/versions.env && echo '/opt/versions.env 仍含 CU 字段: OK'
             check-envs
           "
 

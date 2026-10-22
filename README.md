@@ -18,13 +18,12 @@ GitHub Actions 构建后推送到 GHCR，并导出单个 `.tar.gz` 上传到 Hug
 | 命令行 | tmux、vim、htop、nvtop、fzf、jq、yq、bat、ffmpeg、git-lfs、gh、rsync；rg/fzf/zoxide/lazygit 取上游最新静态二进制 |
 | Shell | zsh（root 默认，bash 保留跑脚本）：fzf-tab Tab 模糊补全、zsh-autosuggestions 灰色历史提示、zsh-syntax-highlighting 语法高亮、`z <目录关键词>` 按历史跳转、fzf 快捷键 |
 | 环境管理 | 基座由 conda 提供解释器、uv 装全部依赖；`activate` 列出/切换 `/opt/envs` 下的 venv；`check-envs` 逐个验证基座与各 venv 的导入 |
-| Coding Agent | herdr、pi、qmd、ck。pi 预置 9 个扩展与 7 个技能（内网离线：扩展在构建期装好并以本地路径引用，运行时不会发起任何网络请求）；Python 语言服务器为 ruff 与 ty（pi-lsp 内置目录里仅有的两个） |
+| Coding Agent | herdr、pi、qmd、ck。pi 预置 9 个扩展（构建期装好，`settings.json` 以绝对路径引用，不依赖运行环境的 npm 源）、5 个仓库内技能（renhua、writing-for-agents、grilling、grill-me、impeccable）+ 2 个 npm 装技能（ui-ux-pro-max、ui-styling）；Python 语言服务器为 ruff 与 ty（pi-lsp 内置目录里仅有的两个） |
 | 中文字体 | Noto Sans CJK + Noto Color Emoji，matplotlib 默认字体已配好，图表中文不再是方框 |
-| Coding Agent | herdr、pi、qmd、ck |
-| sglang 环境 | `/opt/envs/sglang`（sglang 0.5.21）。与 vllm 在 transformers / xgrammar / flashinfer-python 三个包上互斥，故独立成 venv；torch 与 torchaudio 复用基座，增量约 1.5 GB |
+| 独立环境 | `/opt/envs/sglang`（sglang 0.5.21）、`/opt/envs/label-studio`。两者与基座包版本互斥，故各自成 venv：sglang 与 vllm 有 24 个同名包版本不同，label-studio 要 openai<2 与 pyarrow<25（基座分别是 3.x 与 26，会弄坏 vllm）；两者的 torch 等兼容部分复用基座 |
 | 其他 | `/opt/StartLux-Decision`、`/root/.cache/modelscope/_github/Megatron-LM` |
 
-暴露端口 `8888`（Jupyter）、`8000`（vLLM）、`8080`（code-server）。默认工作目录 `/workspace`。
+暴露端口 `8888`（Jupyter）、`8000`（vLLM）、`8080`（code-server）、`8090`（label-studio）。默认工作目录 `/workspace`。
 容器内 `python` 直接就是 `/opt/conda` 的 base 环境，无需 `conda activate`；SSH 登录会话由 `/etc/profile.d/zz-conda-path.sh` 保证同样的 PATH。
 
 ## 版本策略
@@ -140,6 +139,11 @@ check-envs          # 验证基座与各 venv 的导入，改过一个环境后�
 ```
 
 `check-envs` 是改动某个环境后的安全网：它会把基座和每个 venv 都验一遍，确认没有互相波及。
+label-studio 在 venv 里启动（端口避开 code-server 的 8080）：
+
+```bash
+/opt/envs/label-studio/bin/label-studio start --port 8090
+```
 
 从 HuggingFace 下载后导入：
 
