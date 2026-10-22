@@ -20,7 +20,7 @@ GitHub Actions 构建后推送到 GHCR，并导出单个 `.tar.gz` 上传到 Hug
 | 环境管理 | 基座由 conda 提供解释器、uv 装全部依赖；`activate` 列出/切换 `/opt/envs` 下的 venv；`check-envs` 逐个验证基座与各 venv 的导入 |
 | Coding Agent | herdr、pi、qmd、ck。pi 预置 9 个扩展（构建期装好，`settings.json` 以绝对路径引用，不依赖运行环境的 npm 源）、5 个仓库内技能（renhua、writing-for-agents、grilling、grill-me、impeccable）+ 2 个 npm 装技能（ui-ux-pro-max、ui-styling）；Python 语言服务器为 ruff 与 ty（pi-lsp 内置目录里仅有的两个） |
 | 中文字体 | Noto Sans CJK + Noto Color Emoji，matplotlib 默认字体已配好，图表中文不再是方框 |
-| 独立环境 | `/opt/envs/sglang`（sglang 0.5.21）、`/opt/envs/label-studio`。两者与基座包版本互斥，故各自成 venv：sglang 与 vllm 有 24 个同名包版本不同，label-studio 要 openai<2 与 pyarrow<25（基座分别是 3.x 与 26，会弄坏 vllm）；两者的 torch 等兼容部分复用基座 |
+| 独立环境 | `/opt/envs/sglang`（sglang 0.5.21）、`/opt/envs/label-studio`。两者与基座包版本互斥，故各自成 venv：sglang 与 vllm 有多个同名包版本不兼容，label-studio 要 openai<2 与 pyarrow<25，而基座按 vllm 的要求是 openai>=2.25、pyarrow 26，装进基座会弄坏 vllm；两者的 torch 等兼容部分复用基座 |
 | 其他 | `/opt/StartLux-Decision`、`/root/.cache/modelscope/_github/Megatron-LM` |
 
 暴露端口 `8888`（Jupyter）、`8000`（vLLM）、`8080`（code-server）、`8090`（label-studio）。默认工作目录 `/workspace`。
@@ -123,8 +123,8 @@ http://<host>:8888/proxy/<端口>/      例如 /proxy/6006/ 访问 TensorBoard
 
 `jupyterlab_iframe` 提供 IFrame widget，`ipylab` 可从 notebook 控制 JupyterLab 界面。
 
-# 随时重跑导入检查
-verify-imports.py
+# 随时重跑导入检查（--no-versions 避免重写 /opt/versions.env）
+verify-imports.py --no-versions
 ```
 
 Shell 小抄：`z <关键词>` 按历史跳目录，Tab 补全支持模糊筛选，Ctrl-R 搜历史命令，Ctrl-T 搜文件。

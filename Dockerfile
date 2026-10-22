@@ -42,7 +42,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     UV_SYSTEM_PYTHON=1 \
     IMPECCABLE_BIN=/opt/impeccable/impeccable \
     # 关闭 pi 自身的后台联网：pi.dev 的版本检查在内网不可达，模型目录刷新同理。
-    # 需要时可在运行时覆盖，例如 docker run -e PI_OFFLINE=0。
+    # 这两个变量按「非空即生效」判断，恢复联网要 unset 而不是设 0。
     PI_OFFLINE=1 \
     PI_SKIP_VERSION_CHECK=1 \
     UV_HTTP_TIMEOUT=300 \
@@ -312,8 +312,9 @@ RUN SITE_PKG=$(python -c "import site; print(site.getsitepackages()[0])") && \
 # 9. 预置 pi 扩展与技能。扩展在构建期装好、settings.json 用绝对路径引用，
 #    好处是确定性：容器内的 npm 默认指向 registry.npmjs.org，不依赖运行环境是否
 #    配好了内部镜像源，启动时也不会去检定更新。内网若有 npm 镜像源，可自行用
-#    `pi install npm:<包>` 再装；设置 `PI_OFFLINE=0 PI_SKIP_VERSION_CHECK=0`
-#    可恢复 pi 自身的后台联网。
+#    `pi install npm:<包>` 再装；要恢复 pi 自身的后台联网需**取消这两个变量**
+#    （pi 判断的是变量是否非空，PI_OFFLINE=0 仍然是开着的），例如：
+#    `env -u PI_OFFLINE -u PI_SKIP_VERSION_CHECK pi`。
 #    扩展必须选 Node 构建：镜像里的 pi 由 npm 全局安装、跑在 Node 上，Bun 专用
 #    构建（opensec-pi-fff / opensec-pi-todo 就是）加载时会抛错并让 pi 直接退出。
 #    对应包分别换成 @ff-labs/pi-fff 与 @juicesharp/rpiv-todo，下面另做构建期拦截。
@@ -348,7 +349,9 @@ RUN mkdir -p /root/.pi/agent/npm && \
     npm cache clean --force && \
     for p in @dietrichgebert/ponytail @ff-labs/pi-fff @juicesharp/rpiv-ask-user-question @juicesharp/rpiv-todo @narumitw/pi-lsp pi-background-tasks pi-goal-x pi-hermes-memory pi-powerline-footer; do \
       test -d "/root/.pi/agent/npm/node_modules/$p" || { echo "pi 扩展未装成功: $p"; exit 1; }; \
-      grep -rqs "is a Bun build" "/root/.pi/agent/npm/node_modules/$p" && { echo "$p 是 Bun 专用构建，在 Node 下会加载失败"; exit 1; }; \
+      if grep -rqs "is a Bun build" "/root/.pi/agent/npm/node_modules/$p"; then \
+        echo "$p 是 Bun 专用构建，在 Node 下会加载失败"; exit 1; \
+      fi; \
     done && \
     printf '%s\n' \
       '{' \
@@ -386,12 +389,13 @@ RUN mkdir -p /root/.pi/agent/npm && \
     echo "pi 技能: 仓库内 5 个 + ui-ux-pro-max / ui-styling（npm 装入）"
 
 # ------------------------------------------------------------------------------
-# 10. 独立环境（一）：sglang。它无法与基座共存：两边各自钉死同名包的不同版本
-#     （实测版本不同的包共 24 个，含 transformers / xgrammar / flashinfer-python /
-#     tokenizers / huggingface-hub / compressed-tensors / cuda-tile 等），而一个环境里
-#     同名包只能存在一份。两者最贵的 torch 2.13.0 与 torchaudio 2.11.0 钉版本恰好
-#     一致，于是用 venv --system-site-packages 复用基座这两项，只把版本不同的包装
-#     进 venv。必须用 pip 而不是 uv：pip 尊重 --system-site-packages（只装缺的），
+# 10. 独立环境（一）：sglang。它无法与基座共存：两边各自钉死多个同名包的不同
+#     版本（transformers / xgrammar / flashinfer-python / tokenizers /
+#     huggingface-hub / compressed-tensors / cuda-tile 等），而一个环境里同名包
+#     只能存在一份，实际覆盖掉几个取决于 pip 对已满足约束的包会保留。
+#     两者最贵的 torch 2.13.0 与 torchaudio 2.11.0 钉版本恰好一致，于是用
+#     venv --system-site-packages 复用基座这两项，只把不兼容的包装进 venv。
+#     必须用 pip 而不是 uv：pip 尊重 --system-site-packages（只装缺的），
 #     并且拒绝卸载 venv 之外的包——基座因此不会被改坏；uv 这两点都不支持。
 # ------------------------------------------------------------------------------
 RUN /opt/conda/bin/python -m venv --system-site-packages /opt/envs/sglang && \
@@ -400,9 +404,10 @@ RUN /opt/conda/bin/python -m venv --system-site-packages /opt/envs/sglang && \
     /opt/envs/sglang/bin/python -c "import sglang, torch, transformers, importlib.metadata as md; print('sglang', sglang.__version__, '| torch', torch.__version__, '| transformers', transformers.__version__, '| flashinfer', md.version('flashinfer-python'))"
 
 # ------------------------------------------------------------------------------
-# 11. 独立环境（二）：label-studio。它要求 openai<2.0（基座是 3.x，而 vllm 要求
-#     openai>=2.25）与 pyarrow<25（基座 26），装进基座会把 vllm 弄坏，所以单独建
-#     venv。同样用 --system-site-packages 复用兼容的部分，冲突的包只落在 venv 里。
+# 11. 独立环境（二）：label-studio。它要求 openai<2.0 与 pyarrow<25，而基座（按
+#     vllm 的要求）是 openai>=2.25、pyarrow 26，装进基座会把 vllm 弄坏，所以单独
+#     建 venv。另有 python-json-logger / pytz / setuptools 等更严的钉，一并隔离。
+#     同样用 --system-site-packages 复用兼容的部分，冲突的包只落在 venv 里。
 #     它默认监听 8080，与 code-server 撞车，启动时用 --port 8090。
 # ------------------------------------------------------------------------------
 RUN /opt/conda/bin/python -m venv --system-site-packages /opt/envs/label-studio && \
