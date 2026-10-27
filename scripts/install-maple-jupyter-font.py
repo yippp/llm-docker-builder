@@ -2,14 +2,12 @@
 """装 Maple Mono NL CN，并把它设成 JupyterLab 的代码/终端字体。"""
 
 import json
-import os
 import shutil
 import subprocess
 from pathlib import Path
 
 SRC = Path("/tmp/maple")
 FONT_DIR = Path("/usr/share/fonts/truetype/maple")
-WEB_DIR_NAME = "fonts"
 MARKER = "/* maple-mono-nl-cn */"
 KEEP_SUFFIX = ("-Regular.ttf", "-Bold.ttf", "-Italic.ttf", "-BoldItalic.ttf")
 
@@ -32,12 +30,11 @@ def family_of(path: Path) -> str:
 
 
 def face(family: str, filename: str, weight: int, style: str) -> str:
-    # 主题 CSS 在 .../lab/api/themes/<name>/index.css，相对路径回到 /static/lab/
-    url = f"../../../../static/lab/{WEB_DIR_NAME}/{filename}"
+    # custom.css 由 /custom/custom.css 提供，字体放在同一目录，用相对路径。
     return (
         "@font-face {\n"
         f"  font-family: {json.dumps(family)};\n"
-        f"  src: url({json.dumps(url)}) format(\"woff2\");\n"
+        f"  src: url({json.dumps(filename)}) format(\"woff2\");\n"
         f"  font-weight: {weight};\n"
         f"  font-style: {style};\n"
         "  font-display: swap;\n"
@@ -67,19 +64,6 @@ def main() -> None:
     family = family_of(regular)
     print("字体家族:", family)
 
-    app = subprocess.check_output(["jupyter", "lab", "path"], text=True)
-    app_dir = ""
-    for line in app.splitlines():
-        if line.startswith("Application directory:"):
-            app_dir = line.split(":", 1)[1].strip()
-    if not app_dir:
-        raise SystemExit("jupyter lab path 没有 Application directory")
-    app_path = Path(app_dir)
-    web_dir = app_path / "static" / WEB_DIR_NAME
-    web_dir.mkdir(parents=True, exist_ok=True)
-    for font in web_fonts:
-        shutil.copy2(font, web_dir / font.name)
-
     css = MARKER + "\n"
     for font in web_fonts:
         stem = font.name
@@ -95,13 +79,23 @@ def main() -> None:
             css += face(family, font.name, 700, "italic")
         elif stem.endswith("-Italic"):
             css += face(family, font.name, 400, "italic")
-    themes = list((app_path / "themes").glob("*/index.css"))
-    if not themes:
-        raise SystemExit(f"没找到主题 CSS: {app_path / 'themes'}")
-    for theme in themes:
-        text = theme.read_text(encoding="utf-8", errors="replace")
-        if MARKER not in text:
-            theme.write_text(text.rstrip() + "\n\n" + css, encoding="utf-8")
+    if "@font-face" not in css:
+        raise SystemExit("没有可嵌入的 woff2")
+
+    # pip 装的 JupyterLab 没有 share/jupyter/lab/themes。字体放到 jupyter_server
+    # 默认会搜索的 static/custom，由 /custom/custom.css 提供，不依赖 HOME。
+    import jupyter_server
+
+    custom_dirs = [
+        Path(jupyter_server.__file__).resolve().parent / "static" / "custom",
+        Path("/opt/jupyter/custom"),
+    ]
+    for dest in custom_dirs:
+        dest.mkdir(parents=True, exist_ok=True)
+        (dest / "custom.css").write_text(css, encoding="utf-8")
+        for font in web_fonts:
+            shutil.copy2(font, dest / font.name)
+    print("字体 CSS:", custom_dirs[0] / "custom.css")
 
     stack = f"{family}, monospace"
     css_stack = f'"{family}", monospace'
@@ -119,10 +113,16 @@ def main() -> None:
         },
     }
     payload = json.dumps(overrides, ensure_ascii=False, indent=2) + "\n"
-    settings = app_path / "settings"
+    app = subprocess.check_output(["jupyter", "lab", "path"], text=True)
+    app_dir = ""
+    for line in app.splitlines():
+        if line.startswith("Application directory:"):
+            app_dir = line.split(":", 1)[1].strip()
+    if not app_dir:
+        raise SystemExit("jupyter lab path 没有 Application directory")
+    settings = Path(app_dir) / "settings"
     settings.mkdir(parents=True, exist_ok=True)
     (settings / "overrides.json").write_text(payload, encoding="utf-8")
-    Path("/opt/jupyter").mkdir(parents=True, exist_ok=True)
     Path("/opt/jupyter/lab-overrides.json").write_text(payload, encoding="utf-8")
     print("已写入", settings / "overrides.json")
 
