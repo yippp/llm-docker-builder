@@ -23,6 +23,8 @@ ARG PYTHON_VERSION=3.12
 # NPM_MAJOR 只固定主版本号：npm@12 取 12.x 中的最新版，不会升到 13 导致构建失败。
 ARG NODE_VERSION=v22.23.3
 ARG NPM_MAJOR=12
+# Maple Mono NL CN：无连字、含简体中文。hinted 包给 1080P 及以下用，作者说明 unhinted 在低分辨率上笔画粗细不齐。
+ARG MAPLE_FONT_VERSION=v7.9
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
@@ -341,6 +343,23 @@ RUN SITE_PKG=$(python -c "import site; print(site.getsitepackages()[0])") && \
     python /usr/local/bin/verify-imports.py && \
     echo "CU=$(nvcc --version | sed -n 's/.*release \([0-9]*\.[0-9]*\).*/\1/p' | head -n 1)" | cat - /opt/versions.env > /tmp/v.env && \
     mv /tmp/v.env /opt/versions.env && cat /opt/versions.env
+
+# ------------------------------------------------------------------------------
+# 8b. 编程字体 Maple Mono NL CN。只留 Regular / Bold / Italic / BoldItalic。
+#     JupyterLab 在浏览器里画字，系统字体到不了页面，所以把 woff2 写进主题 CSS。
+#     默认主题 JupyterLab Dark，终端和代码字体都用这套。matplotlib 仍用 Noto。
+# ------------------------------------------------------------------------------
+COPY scripts/install-maple-jupyter-font.py /usr/local/bin/install-maple-jupyter-font.py
+RUN set -euo pipefail; \
+    apt-get update && apt-get install -y --no-install-recommends woff2 && \
+    mkdir -p /tmp/maple && \
+    curl -fsSL -o /tmp/maple.zip "https://github.com/subframe7536/maple-font/releases/download/${MAPLE_FONT_VERSION}/MapleMonoNL-CN.zip" && \
+    curl -fsSL -o /tmp/maple.sha256 "https://github.com/subframe7536/maple-font/releases/download/${MAPLE_FONT_VERSION}/MapleMonoNL-CN.sha256" && \
+    echo "$(awk '{print $1}' /tmp/maple.sha256)  /tmp/maple.zip" | sha256sum -c - && \
+    unzip -q /tmp/maple.zip -d /tmp/maple && \
+    python /usr/local/bin/install-maple-jupyter-font.py && \
+    rm -rf /tmp/maple /tmp/maple.zip /tmp/maple.sha256 && \
+    apt-get purge -y woff2 && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
 
 # ------------------------------------------------------------------------------
 # 9. 预置 pi 扩展与技能。扩展在构建期装好、settings.json 用绝对路径引用，
