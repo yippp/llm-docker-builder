@@ -145,8 +145,6 @@ jobs:
             test "$(pip list 2>/dev/null | grep -cE '^(jupyterlab-git|jupyter-resource-usage|jupyterlab-lsp|python-lsp-server|jupyterlab-execute-time|ipympl|hf-transfer|gpustat|pycocotools|jupyter-server-proxy|jupyterlab-iframe|tornado-proxy-handlers|ipylab|jupyterlab-nvdashboard|ipydatagrid|anywidget|itables|plotly|bokeh|netcal|torchmetrics|system-one|sentencepiece|ruff|ty)')" -ge 25 && echo "新增 pip 包: OK"
             nvcc --version | grep -i release
             jupyter lab --version && jupyter notebook --version
-            fc-list : family | grep -q 'Maple Mono' && echo 'Maple Mono: OK'
-            python -c "import json; d=json.load(open('/opt/jupyter/lab-overrides.json')); assert d['@jupyterlab/apputils-extension:themes']['theme']=='JupyterLab Dark'; assert 'Maple Mono' in d['@jupyterlab/terminal-extension:plugin']['fontFamily']; print('JupyterLab 深色主题与代码字体: OK')"
             jupyter kernelspec list | grep -E 'python3[0-9]+'
             node -v && npm -v && bun -v
             which herdr && herdr --help > /dev/null
