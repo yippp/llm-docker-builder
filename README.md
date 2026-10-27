@@ -16,9 +16,9 @@ GitHub Actions 构建后推送到 GHCR，并导出单个 `.tar.gz` 上传到 Hug
 | 注意力 | flash-attn，取自 mjun0812 的预编译轮子仓库（排除 ROCm 构建，优先匹配与 torch 一致的 CUDA 小版本） |
 | 前端工具 | JupyterLab（`start-jupyter`）：git 面板、内存表、LSP 代码智能、单元格耗时、ipympl、nvdashboard（GPU 面板）、ipydatagrid、anywidget、itables、plotly、bokeh；jupyter-server-proxy + jupyterlab-iframe + tornado-proxy-handlers + ipylab（在 Jupyter 里嵌入外部 Web UI）；VS Code 浏览器版（`start-code-server`，端口 8080）；Node.js、Bun、npm |
 | 命令行 | tmux、vim、htop、nvtop、fzf、jq、yq、bat、ffmpeg、git-lfs、gh、rsync；rg/fzf/zoxide/lazygit 取上游最新静态二进制 |
-| Shell | zsh（root 默认，bash 保留跑脚本）：fzf-tab Tab 模糊补全、zsh-autosuggestions 灰色历史提示、zsh-syntax-highlighting 语法高亮、`z <目录关键词>` 按历史跳转、fzf 快捷键 |
+| Shell | zsh（系统级 `/etc/zsh/zz-image.zsh`，不依赖某个用户的 HOME；Jupyter 终端也强制 zsh）：fzf-tab、zsh-autosuggestions、zsh-syntax-highlighting、`z <目录关键词>`、fzf 快捷键。bash 仍用来跑脚本 |
 | 环境管理 | 基座由 conda 提供解释器、uv 装全部依赖；`activate` 列出/切换 `/opt/envs` 下的 venv；`check-envs` 逐个验证基座与各 venv 的导入 |
-| Coding Agent | herdr、pi、qmd、ck。pi 预置 9 个扩展（构建期装好，`settings.json` 以绝对路径引用，不依赖运行环境的 npm 源）、5 个仓库内技能（renhua、writing-for-agents、grilling、grill-me、impeccable）+ 2 个 npm 装技能（ui-ux-pro-max、ui-styling）；Python 语言服务器为 ruff 与 ty（pi-lsp 内置目录里仅有的两个） |
+| Coding Agent | herdr、pi、qmd、ck。pi 预置 9 个扩展（装在 `/opt/pi-extensions`，`/opt/pi-agent/settings.json` 以绝对路径引用，不依赖 HOME 和运行时 npm 源）和 7 个技能（都在 `/opt/pi-agent/skills`）。配置目录由 `PI_CODING_AGENT_DIR=/opt/pi-agent` 固定，不写模型、思考强度和凭据。Python 语言服务器为 ruff 与 ty |
 | 中文字体 | Noto Sans CJK + Noto Color Emoji，matplotlib 默认字体已配好，图表中文不再是方框 |
 | 独立环境 | `/opt/envs/sglang`（sglang 0.5.21）、`/opt/envs/label-studio`。两者与基座包版本互斥，故各自成 venv：sglang 与 vllm 有多个同名包版本不兼容，label-studio 要 openai<2 与 pyarrow<25，而基座按 vllm 的要求是 openai>=2.25、pyarrow 26，装进基座会弄坏 vllm；两者的 torch 等兼容部分复用基座 |
 | 其他 | `/opt/StartLux-Decision`、`/root/.cache/modelscope/_github/Megatron-LM` |
@@ -72,6 +72,7 @@ SWIFT=4.6.0
 TORCH=2.13.0
 DEEPSPEED=0.19.8
 FLASH_ATTN=2.8.3
+PI=<pi --version>  # 不进 tag，只在这个文件里溯源
 ```
 
 workflow 读取该文件生成 tag，形如：

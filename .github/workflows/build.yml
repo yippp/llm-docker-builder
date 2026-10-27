@@ -156,23 +156,20 @@ jobs:
           echo "=== [1.5/3] 验证 pi 预置（扩展、技能、加载）==="
           docker run --rm local-test:verify bash -c "
             set -e
-            jq -e '.packages | length == 9' /root/.pi/agent/settings.json > /dev/null
-            jq -e '[.packages[] | select(startswith(\"/root/.pi/agent/npm/node_modules/\"))] | length == 9' /root/.pi/agent/settings.json > /dev/null
-            echo '9 个扩展均为本地路径引用（不会触发 npm install）: OK'
-            for s in renhua writing-for-agents grilling grill-me impeccable; do
-              test -f \"/root/.pi/agent/skills/\$s/SKILL.md\"
+            test \"\$PI_CODING_AGENT_DIR\" = /opt/pi-agent
+            jq -e '.packages | length == 9' /opt/pi-agent/settings.json > /dev/null
+            jq -e '[.packages[] | select(startswith(\"/opt/pi-extensions/node_modules/\"))] | length == 9' /opt/pi-agent/settings.json > /dev/null
+            echo '9 个扩展均为 /opt 路径引用（不依赖 HOME）: OK'
+            for s in renhua writing-for-agents grilling grill-me impeccable ui-ux-pro-max ui-styling; do
+              test -f \"/opt/pi-agent/skills/\$s/SKILL.md\"
             done
-            echo '仓库内 5 个技能: OK'
-            for s in ui-ux-pro-max ui-styling; do
-              test -f \"/root/.agents/skills/\$s/SKILL.md\"
-            done
-            echo 'npm 装入的 2 个技能: OK'
+            echo '7 个技能都在 /opt/pi-agent/skills: OK'
             test -x /opt/impeccable/impeccable && echo 'impeccable 引擎: OK'
-            out=\$(pi -p x 2>&1 || true)
+            out=\$(HOME=/tmp/pi-home-remap pi -p x 2>&1 || true)
             if echo \"\$out\" | grep -q 'Failed to load extension'; then
-              echo 'pi 扩展加载失败：'; echo \"\$out\" | head -n 5; exit 1
+              echo 'HOME 改掉后扩展加载失败：'; echo \"\$out\" | head -n 5; exit 1
             fi
-            echo 'pi 扩展加载: 无报错'
+            echo 'HOME 改掉后扩展仍加载: OK'
           "
 
           echo "=== [1.6/3] 验证独立环境（sglang / label-studio）与 check-envs ==="
@@ -183,6 +180,7 @@ jobs:
             python -c \"import torch, transformers, vllm; print('基座未被动过: torch', torch.__version__, '| transformers', transformers.__version__, '| vllm', vllm.__version__)\"
             python -c \"import importlib.metadata as md; print('基座 openai', md.version('openai'), '| pyarrow', md.version('pyarrow'))\"
             grep -q '^CU=' /opt/versions.env && echo '/opt/versions.env 仍含 CU 字段: OK'
+            grep -q '^PI=' /opt/versions.env && echo '/opt/versions.env 含 PI 字段: OK'
             check-envs
           "
 

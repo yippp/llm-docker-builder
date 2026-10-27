@@ -41,6 +41,13 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
     UV_SYSTEM_PYTHON=1 \
     IMPECCABLE_BIN=/opt/impeccable/impeccable \
+    # pi 的配置目录默认是 ~/.pi/agent。平台把 HOME 改掉之后，写在 /root 下的
+    # settings.json 和技能都不会被读到。固定到 /opt/pi-agent，与 HOME 无关。
+    # 没有 PI_CONFIG_DIR，对应变量是 PI_CODING_AGENT_DIR。要改读持久卷上的用户配置，
+    # 把这个变量指过去即可；扩展仍在 /opt/pi-extensions，按绝对路径引用。
+    # 这里不写模型、思考强度和凭据，那些是使用者自己的配置。
+    PI_CODING_AGENT_DIR=/opt/pi-agent \
+    SHELL=/bin/zsh \
     # 关闭 pi 自身的后台联网：pi.dev 的版本检查在内网不可达，模型目录刷新同理。
     # 这两个变量按「非空即生效」判断，恢复联网要 unset 而不是设 0。
     PI_OFFLINE=1 \
@@ -246,17 +253,36 @@ RUN SITE_PKG=$(python -c "import site; print(site.getsitepackages()[0])") && \
     make -C /root/.cache/modelscope/_github/Megatron-LM/megatron/core/datasets || true && \
     git clone --depth 1 https://github.com/StartLuxLabs/Startlux-Decision.git /opt/StartLux-Decision && \
     printf "set -g mouse on\nset -g history-limit 50000\nset -g default-terminal 'screen-256color'\nset -g status-bg black\nset -g status-fg green\n" > /root/.tmux.conf && \
-    printf 'HISTFILE="$HOME/.zsh_history"\nHISTSIZE=50000\nSAVEHIST=50000\nsetopt SHARE_HISTORY HIST_IGNORE_DUPS HIST_REDUCE_BLANKS\nautoload -Uz compinit && compinit\nsource /opt/zsh-plugins/fzf-tab/fzf-tab.plugin.zsh\neval "$(fzf --zsh 2>/dev/null)"\neval "$(zoxide init zsh)"\nsource /usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh\nsource /usr/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh\n' > /root/.zshrc && \
-    cp /root/.zshrc /etc/skel/.zshrc && \
+    printf '%s\n' \
+      '# 已加载过就返回，避免 /etc/zsh/zshrc 和用户 .zshrc 各引一次' \
+      '[[ -n ${_LLM_ENV_ZSH:-} ]] && return' \
+      '_LLM_ENV_ZSH=1' \
+      'HISTFILE="${HOME}/.zsh_history"' \
+      'HISTSIZE=50000' \
+      'SAVEHIST=50000' \
+      'setopt SHARE_HISTORY HIST_IGNORE_DUPS HIST_REDUCE_BLANKS' \
+      'autoload -Uz compinit && compinit' \
+      'source /opt/zsh-plugins/fzf-tab/fzf-tab.plugin.zsh' \
+      'eval "$(fzf --zsh 2>/dev/null)"' \
+      'eval "$(zoxide init zsh)"' \
+      'source /usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh' \
+      'source /usr/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh' \
+      > /etc/zsh/zz-image.zsh && \
+    touch /etc/zsh/zshrc && \
+    grep -q zz-image.zsh /etc/zsh/zshrc || printf '\n[ -r /etc/zsh/zz-image.zsh ] && source /etc/zsh/zz-image.zsh\n' >> /etc/zsh/zshrc && \
+    printf '%s\n' '[ -r /etc/zsh/zz-image.zsh ] && source /etc/zsh/zz-image.zsh' > /etc/skel/.zshrc && \
+    cp /etc/skel/.zshrc /root/.zshrc && \
     usermod -s /bin/zsh root && \
     printf 'export PATH=/opt/conda/bin:/usr/local/cuda/bin:$PATH\nexport LD_LIBRARY_PATH=/usr/local/cuda/compat:/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}\n' > /etc/profile.d/zz-conda-path.sh && \
     printf '#!/bin/bash\nexec code-server --bind-addr 0.0.0.0:${CODE_SERVER_PORT:-8080} --auth password\n' > /usr/local/bin/start-code-server && \
     chmod +x /usr/local/bin/start-code-server && \
     printf '#!/bin/bash\nexec jupyter lab --ip=0.0.0.0 --port=${JUPYTER_PORT:-8888} --no-browser --allow-root --ServerApp.token="${JUPYTER_TOKEN:-}" --ServerApp.password="" --notebook-dir=/workspace\n' > /usr/local/bin/start-jupyter && \
     chmod +x /usr/local/bin/start-jupyter && \
+    mkdir -p /etc/jupyter && \
+    printf '%s\n' 'c.ServerApp.terminado_settings = {"shell_command": ["/bin/zsh", "-l"]}' > /etc/jupyter/jupyter_server_config.py && \
     printf '%s\n' \
       '#!/usr/bin/env python3' \
-      'import importlib, sys' \
+      'import importlib, subprocess, sys' \
       'MODS = """numpy pyarrow scipy sklearn cv2 pandas pydantic openai' \
       'torch torchvision torchaudio transformers datasets peft trl deepspeed' \
       'modelscope vllm swift timm decord librosa audioread soundfile einops' \
@@ -281,6 +307,13 @@ RUN SITE_PKG=$(python -c "import site; print(site.getsitepackages()[0])") && \
       'print("全部核心模块导入成功 | vllm", vllm.__version__, "| ms-swift", swift.__version__)' \
       'print("torch", torch.__version__, "| transformers", transformers.__version__,' \
       '      "| deepspeed", deepspeed.__version__, "| pydantic", pydantic.__version__)' \
+      'try:' \
+      '    pi_ver = subprocess.check_output(["pi", "--version"], text=True).strip().split()[-1]' \
+      'except Exception as exc:' \
+      '    pi_ver = "none"' \
+      '    print("pi --version 失败:", exc)' \
+      'else:' \
+      '    print("pi", pi_ver)' \
       'import importlib.metadata as md' \
       'def _ver(pkg):' \
       '    try:' \
@@ -298,6 +331,7 @@ RUN SITE_PKG=$(python -c "import site; print(site.getsitepackages()[0])") && \
       '        ("TORCH", torch.__version__),' \
       '        ("DEEPSPEED", deepspeed.__version__),' \
       '        ("FLASH_ATTN", _ver("flash-attn")),' \
+      '        ("PI", pi_ver),' \
       '    ]:' \
       '        line = key + "=" + str(val)' \
       '        fh.write(line + "\n")' \
@@ -323,11 +357,13 @@ RUN SITE_PKG=$(python -c "import site; print(site.getsitepackages()[0])") && \
 #    ty server）；python-lsp-server 是第 6 步为 JupyterLab 装的，两者互不干扰。
 #    impeccable 技能的引擎平时从 GitHub Releases 下载，这里预先取回并用
 #    IMPECCABLE_BIN 指向它，附带 sha256 校验。
-#    ui-ux-pro-max 与 ui-styling 由 ui-ux-pro-max-cli 在构建期装入 ~/.agents/skills，
-#    --offline 用包内自带模板与数据，不联网。
+#    ui-ux-pro-max 与 ui-styling 由 ui-ux-pro-max-cli 在构建期装入，再挪到
+#    /opt/pi-agent/skills。--offline 用包内自带模板与数据，不联网。
+#    扩展装在 /opt/pi-extensions，不放进 $HOME：平台重映射 HOME 时，写在
+#    /root/.pi 下的绝对路径会静默失效。
 # ------------------------------------------------------------------------------
-COPY pi/skills/ /root/.pi/agent/skills/
-RUN mkdir -p /root/.pi/agent/npm && \
+COPY pi/skills/ /opt/pi-agent/skills/
+RUN mkdir -p /opt/pi-extensions && \
     printf '%s\n' \
       '{' \
       '  "name": "pi-extensions",' \
@@ -343,13 +379,13 @@ RUN mkdir -p /root/.pi/agent/npm && \
       '    "pi-hermes-memory": "^0.9.11",' \
       '    "pi-powerline-footer": "^0.20.2"' \
       '  }' \
-      '}' > /root/.pi/agent/npm/package.json && \
-    cd /root/.pi/agent/npm && \
+      '}' > /opt/pi-extensions/package.json && \
+    cd /opt/pi-extensions && \
     npm install --omit=dev --legacy-peer-deps --no-audit --no-fund && \
     npm cache clean --force && \
     for p in @dietrichgebert/ponytail @ff-labs/pi-fff @juicesharp/rpiv-ask-user-question @juicesharp/rpiv-todo @narumitw/pi-lsp pi-background-tasks pi-goal-x pi-hermes-memory pi-powerline-footer; do \
-      test -d "/root/.pi/agent/npm/node_modules/$p" || { echo "pi 扩展未装成功: $p"; exit 1; }; \
-      if grep -rqs "is a Bun build" "/root/.pi/agent/npm/node_modules/$p"; then \
+      test -d "/opt/pi-extensions/node_modules/$p" || { echo "pi 扩展未装成功: $p"; exit 1; }; \
+      if grep -rqs "is a Bun build" "/opt/pi-extensions/node_modules/$p"; then \
         echo "$p 是 Bun 专用构建，在 Node 下会加载失败"; exit 1; \
       fi; \
     done && \
@@ -357,18 +393,18 @@ RUN mkdir -p /root/.pi/agent/npm && \
       '{' \
       '  "theme": "dark",' \
       '  "packages": [' \
-      '    "/root/.pi/agent/npm/node_modules/@dietrichgebert/ponytail",' \
-      '    "/root/.pi/agent/npm/node_modules/@ff-labs/pi-fff",' \
-      '    "/root/.pi/agent/npm/node_modules/@juicesharp/rpiv-ask-user-question",' \
-      '    "/root/.pi/agent/npm/node_modules/@juicesharp/rpiv-todo",' \
-      '    "/root/.pi/agent/npm/node_modules/@narumitw/pi-lsp",' \
-      '    "/root/.pi/agent/npm/node_modules/pi-background-tasks",' \
-      '    "/root/.pi/agent/npm/node_modules/pi-goal-x",' \
-      '    "/root/.pi/agent/npm/node_modules/pi-hermes-memory",' \
-      '    "/root/.pi/agent/npm/node_modules/pi-powerline-footer"' \
+      '    "/opt/pi-extensions/node_modules/@dietrichgebert/ponytail",' \
+      '    "/opt/pi-extensions/node_modules/@ff-labs/pi-fff",' \
+      '    "/opt/pi-extensions/node_modules/@juicesharp/rpiv-ask-user-question",' \
+      '    "/opt/pi-extensions/node_modules/@juicesharp/rpiv-todo",' \
+      '    "/opt/pi-extensions/node_modules/@narumitw/pi-lsp",' \
+      '    "/opt/pi-extensions/node_modules/pi-background-tasks",' \
+      '    "/opt/pi-extensions/node_modules/pi-goal-x",' \
+      '    "/opt/pi-extensions/node_modules/pi-hermes-memory",' \
+      '    "/opt/pi-extensions/node_modules/pi-powerline-footer"' \
       '  ]' \
-      '}' > /root/.pi/agent/settings.json && \
-    IMP_VER=$(cat /root/.pi/agent/skills/impeccable/scripts/VERSION) && \
+      '}' > /opt/pi-agent/settings.json && \
+    IMP_VER=$(cat /opt/pi-agent/skills/impeccable/scripts/VERSION) && \
     mkdir -p /opt/impeccable && \
     curl -fsSL "https://github.com/pbakaus/impeccable/releases/download/engine-v${IMP_VER}/impeccable-linux-x64" -o /opt/impeccable/impeccable-linux-x64 && \
     curl -fsSL "https://github.com/pbakaus/impeccable/releases/download/engine-v${IMP_VER}/impeccable-linux-x64.sha256" -o /tmp/impeccable.sha256 && \
@@ -379,14 +415,14 @@ RUN mkdir -p /root/.pi/agent/npm && \
     test -x /opt/impeccable/impeccable && echo "impeccable 引擎已就位 (${IMP_VER})" && \
     npm install -g ui-ux-pro-max-cli && \
     uipro init --ai universal --global --offline && \
-    for s in /root/.agents/skills/*/; do \
-      n=$(basename "$s"); \
-      case "$n" in ui-ux-pro-max|ui-styling) ;; *) rm -rf "$s" ;; esac; \
+    for s in ui-ux-pro-max ui-styling; do \
+      test -f "/root/.agents/skills/$s/SKILL.md" || { echo "uipro 未装入 $s"; exit 1; }; \
+      rm -rf "/opt/pi-agent/skills/$s"; \
+      mv "/root/.agents/skills/$s" "/opt/pi-agent/skills/$s"; \
     done && \
-    test -f /root/.agents/skills/ui-ux-pro-max/SKILL.md && \
-    test -f /root/.agents/skills/ui-styling/SKILL.md && \
+    rm -rf /root/.agents && \
     npm cache clean --force && \
-    echo "pi 技能: 仓库内 5 个 + ui-ux-pro-max / ui-styling（npm 装入）"
+    echo "pi 技能: 仓库内 5 个 + ui-ux-pro-max / ui-styling（都在 /opt/pi-agent/skills）"
 
 # ------------------------------------------------------------------------------
 # 10. 独立环境（一）：sglang。它无法与基座共存：两边各自钉死多个同名包的不同
@@ -463,9 +499,9 @@ RUN printf '%s\n' \
       'done' \
       'exit $fail' > /usr/local/bin/check-envs && \
     chmod +x /usr/local/bin/check-envs && \
-    printf '\nsource /etc/profile.d/zz-activate.sh\n' >> /root/.bashrc && \
-    printf '\nsource /etc/profile.d/zz-activate.sh\n' >> /root/.zshrc && \
-    printf '\nsource /etc/profile.d/zz-activate.sh\n' >> /etc/skel/.zshrc && \
+    printf '\nsource /etc/profile.d/zz-activate.sh\n' >> /etc/zsh/zz-image.zsh && \
+    touch /etc/bash.bashrc && \
+    grep -q zz-activate.sh /etc/bash.bashrc || printf '\n[ -r /etc/profile.d/zz-activate.sh ] && . /etc/profile.d/zz-activate.sh\n' >> /etc/bash.bashrc && \
     check-envs
 
 ENV MAX_JOBS=8 \
