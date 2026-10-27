@@ -278,13 +278,10 @@ RUN SITE_PKG=$(python -c "import site; print(site.getsitepackages()[0])") && \
     printf 'export PATH=/opt/conda/bin:/usr/local/cuda/bin:$PATH\nexport LD_LIBRARY_PATH=/usr/local/cuda/compat:/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}\n' > /etc/profile.d/zz-conda-path.sh && \
     printf '#!/bin/bash\nexec code-server --bind-addr 0.0.0.0:${CODE_SERVER_PORT:-8080} --auth password\n' > /usr/local/bin/start-code-server && \
     chmod +x /usr/local/bin/start-code-server && \
-    printf '#!/bin/bash\nexec jupyter lab --custom-css --ip=0.0.0.0 --port=${JUPYTER_PORT:-8888} --no-browser --allow-root --ServerApp.token="${JUPYTER_TOKEN:-}" --ServerApp.password="" --notebook-dir=/workspace\n' > /usr/local/bin/start-jupyter && \
+    printf '#!/bin/bash\nexec jupyter lab --ip=0.0.0.0 --port=${JUPYTER_PORT:-8888} --no-browser --allow-root --ServerApp.token="${JUPYTER_TOKEN:-}" --ServerApp.password="" --notebook-dir=/workspace\n' > /usr/local/bin/start-jupyter && \
     chmod +x /usr/local/bin/start-jupyter && \
     mkdir -p /etc/jupyter && \
-    printf '%s\n' \
-      'c.ServerApp.terminado_settings = {"shell_command": ["/bin/zsh", "-l"]}' \
-      'c.LabApp.custom_css = True' \
-      > /etc/jupyter/jupyter_server_config.py && \
+    printf '%s\n' 'c.ServerApp.terminado_settings = {"shell_command": ["/bin/zsh", "-l"]}' > /etc/jupyter/jupyter_server_config.py && \
     printf '%s\n' \
       '#!/usr/bin/env python3' \
       'import importlib, subprocess, sys' \
@@ -349,8 +346,7 @@ RUN SITE_PKG=$(python -c "import site; print(site.getsitepackages()[0])") && \
 
 # ------------------------------------------------------------------------------
 # 8b. 编程字体 Maple Mono NL CN。只留 Regular / Bold / Italic / BoldItalic。
-#     pip 装的 JupyterLab 没有 themes 目录。字体放到 jupyter_server 默认搜索的
-#     static/custom，由 /custom/custom.css 提供，不依赖 HOME。
+#     JupyterLab 在浏览器里画字，系统字体到不了页面，所以把 woff2 写进主题 CSS。
 #     默认主题 JupyterLab Dark，终端和代码字体都用这套。matplotlib 仍用 Noto。
 # ------------------------------------------------------------------------------
 COPY scripts/install-maple-jupyter-font.py /usr/local/bin/install-maple-jupyter-font.py

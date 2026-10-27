@@ -19,7 +19,7 @@ GitHub Actions 构建后推送到 GHCR，并导出单个 `.tar.gz` 上传到 Hug
 | Shell | zsh（系统级 `/etc/zsh/zz-image.zsh`，不依赖某个用户的 HOME；Jupyter 终端也强制 zsh）：fzf-tab、zsh-autosuggestions、zsh-syntax-highlighting、`z <目录关键词>`、fzf 快捷键。bash 仍用来跑脚本 |
 | 环境管理 | 基座由 conda 提供解释器、uv 装全部依赖；`activate` 列出/切换 `/opt/envs` 下的 venv；`check-envs` 逐个验证基座与各 venv 的导入 |
 | Coding Agent | herdr、pi、qmd、ck。pi 预置 9 个扩展（装在 `/opt/pi-extensions`，`/opt/pi-agent/settings.json` 以绝对路径引用，不依赖 HOME 和运行时 npm 源）和 7 个技能（都在 `/opt/pi-agent/skills`）。配置目录由 `PI_CODING_AGENT_DIR=/opt/pi-agent` 固定，不写模型、思考强度和凭据。Python 语言服务器为 ruff 与 ty |
-| 中文字体 | Noto Sans CJK + Noto Color Emoji，matplotlib 默认字体已配好。编程字体是 Maple Mono NL CN v7.9（无连字、含简体中文、hinted，给 1080P 及以下用），只留 Regular / Bold / Italic / BoldItalic。JupyterLab 默认 JupyterLab Dark，终端和代码字体都是这套；字体由 `/custom/custom.css` 提供，浏览器不用另装 |
+| 中文字体 | Noto Sans CJK + Noto Color Emoji，matplotlib 默认字体已配好。编程字体是 Maple Mono NL CN v7.9（无连字、含简体中文、hinted，给 1080P 及以下用），只留 Regular / Bold / Italic / BoldItalic。JupyterLab 默认 JupyterLab Dark，终端和代码字体都是这套；字体嵌在主题 CSS 里，浏览器不用另装 |
 | 独立环境 | `/opt/envs/sglang`（sglang 0.5.21）、`/opt/envs/label-studio`。两者与基座包版本互斥，故各自成 venv：sglang 与 vllm 有多个同名包版本不兼容，label-studio 要 openai<2 与 pyarrow<25，而基座按 vllm 的要求是 openai>=2.25、pyarrow 26，装进基座会弄坏 vllm；两者的 torch 等兼容部分复用基座 |
 | 其他 | `/opt/StartLux-Decision`、`/root/.cache/modelscope/_github/Megatron-LM` |
 
