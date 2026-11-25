@@ -33,11 +33,11 @@ ENV DEBIAN_FRONTEND=noninteractive \
     # gptqmodel 的 setup.py 只认不带前缀的 CUDA_ARCH_LIST（探测顺序：该变量 →
     # nvidia-smi），GitHub runner 没有 GPU 和 nvidia-smi，不设则源码编译直接报错。
     # 架构列表只在这两处维护，第 7 步的 DeepSpeed 编译读同一份 ENV。
-    # 需要 B300 时不必加回 10.0;10.3，改成 "8.0;9.0+PTX" 由驱动即时编译即可。
     CUDA_ARCH_LIST="8.0;9.0" \
     CONDA_DIR=/opt/conda \
+    MEGATRON_LM_PATH=/root/.cache/modelscope/_github/Megatron-LM \
     PATH=/root/.local/bin:/root/.bun/bin:/opt/conda/bin:/usr/local/cuda/bin:$PATH \
-    LD_LIBRARY_PATH=/usr/local/cuda/compat:/usr/local/cuda/lib64:$LD_LIBRARY_PATH \
+    LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH \
     PIP_NO_CACHE_DIR=1 \
     UV_SYSTEM_PYTHON=1 \
     IMPECCABLE_BIN=/opt/impeccable/impeccable \
@@ -61,8 +61,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
 #    zsh 及两个补全插件与中文字体（图表和终端的中文不再显示为方框）
 # ------------------------------------------------------------------------------
 RUN apt-get update && apt-get install -y --no-install-recommends --allow-change-held-packages \
-    tmux vim nano htop nvtop iotop lsof tree fzf jq bat \
-    ripgrep fd-find \
+    tmux vim nano htop nvtop iotop lsof tree jq bat \
+    fd-find \
     zsh zsh-autosuggestions zsh-syntax-highlighting \
     fonts-noto-cjk fonts-noto-color-emoji \
     ffmpeg libavcodec-dev libavformat-dev libswscale-dev libsndfile1-dev libsox-dev \
@@ -98,6 +98,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends --allow-change-
       curl -fsSL "$asset" | tar -xz -C /tmp/fetch && \
       install -m 755 "$(find /tmp/fetch -type f -name "$bin" | head -n 1)" "/usr/local/bin/$bin"; \
     done && \
+    rm -rf /tmp/fetch && \
     rg --version | head -n 1 && fzf --version && zoxide --version && lazygit --version | head -n 1 && \
     git clone --depth 1 https://github.com/Aloxaf/fzf-tab.git /opt/zsh-plugins/fzf-tab
 
@@ -249,10 +250,10 @@ RUN SITE_PKG=$(python -c "import site; print(site.getsitepackages()[0])") && \
     printf '\nfont.sans-serif: Noto Sans CJK SC, DejaVu Sans\naxes.unicode_minus: False\n' >> "${SITE_PKG}/matplotlib/mpl-data/matplotlibrc" && \
     rm -f /tmp/torch_constraints.txt && \
     mkdir -p /root/.cache/modelscope/_github /opt && \
-    git clone --depth 1 https://github.com/NVIDIA/Megatron-LM.git /root/.cache/modelscope/_github/Megatron-LM && \
-    make -C /root/.cache/modelscope/_github/Megatron-LM/megatron/core/datasets || true && \
+    git clone --depth 1 https://github.com/NVIDIA/Megatron-LM.git "${MEGATRON_LM_PATH}" && \
+    make -C "${MEGATRON_LM_PATH}/megatron/core/datasets" || true && \
     git clone --depth 1 https://github.com/StartLuxLabs/Startlux-Decision.git /opt/StartLux-Decision && \
-    printf "set -g mouse on\nset -g history-limit 50000\nset -g default-terminal 'screen-256color'\nset -g status-bg black\nset -g status-fg green\n" > /root/.tmux.conf && \
+    printf "set -g mouse on\nset -g history-limit 50000\nset -g default-terminal 'screen-256color'\nset -g status-bg black\nset -g status-fg green\n" > /etc/tmux.conf && \
     printf '%s\n' \
       '# 已加载过就返回，避免 /etc/zsh/zshrc 和用户 .zshrc 各引一次' \
       '[[ -n ${_LLM_ENV_ZSH:-} ]] && return' \
@@ -273,7 +274,7 @@ RUN SITE_PKG=$(python -c "import site; print(site.getsitepackages()[0])") && \
     printf '%s\n' '[ -r /etc/zsh/zz-image.zsh ] && source /etc/zsh/zz-image.zsh' > /etc/skel/.zshrc && \
     cp /etc/skel/.zshrc /root/.zshrc && \
     usermod -s /bin/zsh root && \
-    printf 'export PATH=/opt/conda/bin:/usr/local/cuda/bin:$PATH\nexport LD_LIBRARY_PATH=/usr/local/cuda/compat:/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}\n' > /etc/profile.d/zz-conda-path.sh && \
+    printf 'export PATH=/opt/conda/bin:/usr/local/cuda/bin:$PATH\nexport LD_LIBRARY_PATH=/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}\n' > /etc/profile.d/zz-conda-path.sh && \
     printf '#!/bin/bash\nexec code-server --bind-addr 0.0.0.0:${CODE_SERVER_PORT:-8080} --auth password\n' > /usr/local/bin/start-code-server && \
     chmod +x /usr/local/bin/start-code-server && \
     printf '#!/bin/bash\nexec jupyter lab --ip=0.0.0.0 --port=${JUPYTER_PORT:-8888} --no-browser --allow-root --ServerApp.token="${JUPYTER_TOKEN:-}" --ServerApp.password="" --notebook-dir=/workspace\n' > /usr/local/bin/start-jupyter && \
@@ -359,6 +360,7 @@ RUN SITE_PKG=$(python -c "import site; print(site.getsitepackages()[0])") && \
 #    IMPECCABLE_BIN 指向它，附带 sha256 校验。
 #    ui-ux-pro-max 与 ui-styling 由 ui-ux-pro-max-cli 在构建期装入，再挪到
 #    /opt/pi-agent/skills。--offline 用包内自带模板与数据，不联网。
+#    lieflat-less-ai-tone 从上游仓库拉取；技能数量由构建步骤动态统计。
 #    扩展装在 /opt/pi-extensions，不放进 $HOME：平台重映射 HOME 时，写在
 #    /root/.pi 下的绝对路径会静默失效。
 # ------------------------------------------------------------------------------
@@ -413,6 +415,10 @@ RUN mkdir -p /opt/pi-extensions && \
     chmod +x /opt/impeccable/impeccable-linux-x64 && \
     ln -sf /opt/impeccable/impeccable-linux-x64 /opt/impeccable/impeccable && \
     test -x /opt/impeccable/impeccable && echo "impeccable 引擎已就位 (${IMP_VER})" && \
+    rm -rf /opt/pi-agent/skills/lieflat-less-ai-tone && \
+    git clone --depth 1 https://github.com/larashero3-dotcom/lieflat-less-ai-tone.git /opt/pi-agent/skills/lieflat-less-ai-tone && \
+    rm -rf /opt/pi-agent/skills/lieflat-less-ai-tone/.git && \
+    test -f /opt/pi-agent/skills/lieflat-less-ai-tone/SKILL.md && \
     npm install -g ui-ux-pro-max-cli && \
     uipro init --ai universal --global --offline && \
     for s in ui-ux-pro-max ui-styling; do \
@@ -422,7 +428,8 @@ RUN mkdir -p /opt/pi-extensions && \
     done && \
     rm -rf /root/.agents && \
     npm cache clean --force && \
-    echo "pi 技能: 仓库内 5 个 + ui-ux-pro-max / ui-styling（都在 /opt/pi-agent/skills）"
+    SKILL_COUNT=$(find /opt/pi-agent/skills -mindepth 2 -maxdepth 2 -name SKILL.md | wc -l) && \
+    echo "pi 技能已就位，共 ${SKILL_COUNT} 个（位于 /opt/pi-agent/skills）"
 
 # ------------------------------------------------------------------------------
 # 10. 独立环境（一）：sglang。它无法与基座共存：两边各自钉死多个同名包的不同
