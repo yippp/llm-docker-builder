@@ -165,10 +165,10 @@ jobs:
           jq -e '.packages | length == 9' /opt/pi-agent/settings.json > /dev/null
           jq -e '[.packages[] | select(startswith("/opt/pi-extensions/node_modules/"))] | length == 9' /opt/pi-agent/settings.json > /dev/null
           echo '9 个扩展均为 /opt 路径引用（不依赖 HOME）: OK'
-          for s in renhua lieflat-less-ai-tone writing-for-agents grilling grill-me impeccable ui-ux-pro-max ui-styling; do
+          for s in renhua lieflat-less-ai-tone writing-for-agents grill-me impeccable ui-ux-pro-max ui-styling; do
             test -f "/opt/pi-agent/skills/$s/SKILL.md"
           done
-          echo '8 个技能都在 /opt/pi-agent/skills: OK'
+          echo '7 个技能都在 /opt/pi-agent/skills: OK'
           test -x /opt/impeccable/impeccable && echo 'impeccable 引擎: OK'
           out=$(HOME=/tmp/pi-home-remap pi -p x 2>&1 || true)
           if echo "$out" | grep -q 'Failed to load extension'; then

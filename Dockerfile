@@ -77,9 +77,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends --allow-change-
     apt-get clean && rm -rf /var/lib/apt/lists/* && \
     wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 && \
     chmod +x /usr/local/bin/yq && \
-    curl -fsSL https://api.github.com/repos/cli/cli/releases/latest -o /tmp/gh.json && \
-    GH_URL=$(jq -r '.assets[].browser_download_url | select(endswith("linux_amd64.tar.gz"))' /tmp/gh.json | head -n 1) && \
-    test -n "$GH_URL" && curl -fsSL "$GH_URL" -o /tmp/gh.tgz && \
+    set -o pipefail && \
+    GH_TAG=$(git ls-remote --tags --refs https://github.com/cli/cli.git 'refs/tags/v*' | \
+      awk '$2 ~ /^refs\/tags\/v[0-9]+\.[0-9]+\.[0-9]+$/ {sub("refs/tags/", "", $2); print $2}' | \
+      sort -V | tail -n 1) && \
+    test -n "$GH_TAG" && \
+    GH_VER="${GH_TAG#v}" && \
+    GH_URL="https://github.com/cli/cli/releases/download/${GH_TAG}/gh_${GH_VER}_linux_amd64.tar.gz" && \
+    curl -fsSL "$GH_URL" -o /tmp/gh.tgz && \
     tar -xzf /tmp/gh.tgz -C /tmp && \
     mv /tmp/gh_*_linux_amd64/bin/gh /usr/local/bin/gh && \
     rm -rf /tmp/gh_* /tmp/gh.tgz && gh --version && \
