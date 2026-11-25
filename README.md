@@ -1,6 +1,6 @@
 # llm-docker-builder
 
-构建 LLM 训练与推理一体的 Docker 镜像，目标卡型 A800 / H20 / H200 / B300。
+构建 LLM 训练与推理一体的 Docker 镜像，目标卡型 A800 / H20 / H200。
 GitHub Actions 构建后推送到 GHCR，并导出单个 `.tar.gz` 上传到 HuggingFace Dataset。
 
 ## 镜像内容
@@ -15,20 +15,28 @@ GitHub Actions 构建后推送到 GHCR，并导出单个 `.tar.gz` 上传到 Hug
 | 决策模型 | netcal + torchmetrics（校准度量 ECE/Brier）、system-one 客户端。基座 Qwen3.5/3.8 已由 ms-swift、transformers（`qwen3_5`）与 vllm 支持，决策头（pointer head）与温度校准需自备训练代码 |
 | 注意力 | flash-attn，取自 mjun0812 的预编译轮子仓库（排除 ROCm 构建，优先匹配与 torch 一致的 CUDA 小版本） |
 | 前端工具 | JupyterLab（`start-jupyter`）：git 面板、内存表、LSP 代码智能、单元格耗时、ipympl、nvdashboard（GPU 面板）、ipydatagrid、anywidget、itables、plotly、bokeh；jupyter-server-proxy + jupyterlab-iframe + tornado-proxy-handlers + ipylab（在 Jupyter 里嵌入外部 Web UI）；VS Code 浏览器版（`start-code-server`，端口 8080）；Node.js、Bun、npm |
-| 命令行 | tmux、vim、htop、nvtop、fzf、jq、yq、bat、ffmpeg、git-lfs、gh、rsync；rg/fzf/zoxide/lazygit 取上游最新静态二进制 |
+| 命令行 | tmux（系统级 `/etc/tmux.conf`）、vim、htop、nvtop、fzf、jq、yq、bat、ffmpeg、git-lfs、gh、rsync；rg/fzf/zoxide/lazygit 取上游最新静态二进制 |
 | Shell | zsh（系统级 `/etc/zsh/zz-image.zsh`，不依赖某个用户的 HOME；Jupyter 终端也强制 zsh）：fzf-tab、zsh-autosuggestions、zsh-syntax-highlighting、`z <目录关键词>`、fzf 快捷键。bash 仍用来跑脚本 |
 | 环境管理 | 基座由 conda 提供解释器、uv 装全部依赖；`activate` 列出/切换 `/opt/envs` 下的 venv；`check-envs` 逐个验证基座与各 venv 的导入 |
-| Coding Agent | herdr、pi、qmd、ck。pi 预置 9 个扩展（装在 `/opt/pi-extensions`，`/opt/pi-agent/settings.json` 以绝对路径引用，不依赖 HOME 和运行时 npm 源）和 7 个技能（都在 `/opt/pi-agent/skills`）。配置目录由 `PI_CODING_AGENT_DIR=/opt/pi-agent` 固定，不写模型、思考强度和凭据。Python 语言服务器为 ruff 与 ty |
+| Coding Agent | herdr、pi、qmd、ck。pi 预置 9 个扩展（装在 `/opt/pi-extensions`，`/opt/pi-agent/settings.json` 以绝对路径引用，不依赖 HOME 和运行时 npm 源）和 8 个技能（仓库内 5 个、`lieflat-less-ai-tone` 构建时从上游 GitHub 拉取、`ui-ux-pro-max` 与 `ui-styling` 由 CLI 生成，均位于 `/opt/pi-agent/skills`）。配置目录由 `PI_CODING_AGENT_DIR=/opt/pi-agent` 固定，不写模型、思考强度和凭据。Python 语言服务器为 ruff 与 ty |
 | 中文字体 | Noto Sans CJK + Noto Color Emoji，matplotlib 默认字体已配好，图表中文不再是方框 |
 | 独立环境 | `/opt/envs/sglang`（sglang 0.5.21）、`/opt/envs/label-studio`。两者与基座包版本互斥，故各自成 venv：sglang 与 vllm 有多个同名包版本不兼容，label-studio 要 openai<2 与 pyarrow<25，而基座按 vllm 的要求是 openai>=2.25、pyarrow 26，装进基座会弄坏 vllm；两者的 torch 等兼容部分复用基座 |
-| 其他 | `/opt/StartLux-Decision`、`/root/.cache/modelscope/_github/Megatron-LM` |
+| 其他 | `/opt/StartLux-Decision`、`/root/.cache/modelscope/_github/Megatron-LM`（由 `MEGATRON_LM_PATH` 指定） |
 
 暴露端口 `8888`（Jupyter）、`8000`（vLLM）、`8080`（code-server）、`8090`（label-studio）。默认工作目录 `/workspace`。
 容器内 `python` 直接就是 `/opt/conda` 的 base 环境，无需 `conda activate`；SSH 登录会话由 `/etc/profile.d/zz-conda-path.sh` 保证同样的 PATH。
 
+镜像不会把 `/usr/local/cuda/compat` 固定加入 `LD_LIBRARY_PATH`。NVIDIA Container Toolkit 可按宿主机驱动情况决定是否启用 CUDA 前向兼容库；若节点使用旧版 toolkit 且需要手动启用，可在启动容器时显式设置：
+
+```bash
+docker run --gpus all -it --rm \
+  -e LD_LIBRARY_PATH=/usr/local/cuda/compat:/usr/local/cuda/lib64:/usr/local/nvidia/lib:/usr/local/nvidia/lib64 \
+  ghcr.io/yippp/llm-env:<tag>
+```
+
 ## 版本策略
 
-Python 库版本一律写成 `>=`，上游发布新版后重跑 workflow 即可取得，不需要改文件。
+除少数因依赖冲突锁定的包外，Python 库版本采用 `>=` 浮动约束。上游发布新版后重跑 workflow 即可取得，不需要改文件。
 需要固定的工具链版本集中在 Dockerfile 顶部的 `ARG`：
 
 ```dockerfile
@@ -96,6 +104,7 @@ Actions → `Build Image & Upload Single tar.gz to HuggingFace` → Run workflow
 | `hf_repo_id` | HuggingFace Dataset 仓库，默认 `TPAMI/llm-docker-images`，不存在时自动创建。命名空间必须是 **HuggingFace** 用户名，与 GitHub 用户名不一定相同 |
 | `hf_private` | 是否设为私有仓库。公开仓库可免登录直链下载 |
 | `upload_github_release` | 是否额外切分上传一份到 GitHub Releases 作为备份 |
+| `compression_level` | pigz 压缩等级（默认 `6`）；`1` 最快但体积较大，`9` 压缩率更高，`11` 使用 zopfli，耗时可能达数小时 |
 
 需要在仓库 Secrets 中配置 `HF_TOKEN`，否则跳过 HuggingFace 上传。
 任务超时设为 180 分钟；构建前会清理 runner 磁盘以释放约 105GB 空间。
@@ -124,7 +133,8 @@ http://<host>:8888/proxy/<端口>/      例如 /proxy/6006/ 访问 TensorBoard
 
 `jupyterlab_iframe` 提供 IFrame widget，`ipylab` 可从 notebook 控制 JupyterLab 界面。
 
-# 随时重跑导入检查（--no-versions 避免重写 /opt/versions.env）
+```bash
+# 随时重新运行导入检查（--no-versions 避免重写 /opt/versions.env）
 verify-imports.py --no-versions
 ```
 
